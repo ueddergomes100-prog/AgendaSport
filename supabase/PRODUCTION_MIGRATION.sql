@@ -32,6 +32,10 @@ alter table public.matches
   on delete cascade;
 
 -- Keep set_attendance_response current for direct SIM/NAO/ESPERA responses.
+-- PostgreSQL cannot change an existing function return type with CREATE OR REPLACE,
+-- so we drop only this function signature before recreating it.
+drop function if exists public.set_attendance_response(uuid, uuid, attendance_status);
+
 create or replace function public.set_attendance_response(p_match_id uuid, p_player_id uuid, p_status attendance_status)
 returns jsonb
 language plpgsql
