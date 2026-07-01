@@ -1,0 +1,41 @@
+services:
+  - type: web
+    name: agenda-sport-api
+    runtime: node
+    plan: starter
+    region: oregon
+    buildCommand: npm ci && npm run build:api
+    startCommand: npm run start:api
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: CORS_ORIGIN
+        value: https://agendasport.com.br,https://www.agendasport.com.br
+      - key: WHATSAPP_PROVIDER
+        value: meta
+      - key: WHATSAPP_ACCESS_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: WHATSAPP_GRAPH_API_VERSION
+        value: v25.0
+      - key: WHATSAPP_VERIFY_TOKEN
+        sync: false
+      - key: WHATSAPP_CONFIRMATION_TEMPLATE_NAME
+        value: confirmacao_pelada
+      - key: WHATSAPP_TEMPLATE_LANGUAGE
+        value: pt_BR
+      - key: REMINDER_WORKER_ENABLED
+        value: true
+      - key: REMINDER_INTERVAL_MINUTES
+        value: 15

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Agenda Sport</title>
+  <desc id="desc">Marca esportiva com monograma AS, calendario, bola e linhas de campo.</desc>
+  <rect width="512" height="512" rx="92" fill="#071a22"/>
+  <path d="M84 122h344a34 34 0 0 1 34 34v236a34 34 0 0 1-34 34H84a34 34 0 0 1-34-34V156a34 34 0 0 1 34-34Z" fill="#0f766e"/>
+  <path d="M50 194h412" fill="none" stroke="#e6fffb" stroke-width="18" opacity=".28"/>
+  <path d="M128 88v72M384 88v72" fill="none" stroke="#f5c542" stroke-width="24" stroke-linecap="round"/>
+  <path d="M96 256h320M96 324h320M176 216v176M256 216v176M336 216v176" fill="none" stroke="#e6fffb" stroke-width="10" opacity=".18"/>
+  <path d="M80 376c58-42 118-63 180-63 54 0 103 16 148 48" fill="none" stroke="#e6fffb" stroke-width="16" stroke-linecap="round" opacity=".28"/>
+  <circle cx="392" cy="142" r="50" fill="#f5c542"/>
+  <path d="m392 92 30 22-11 36h-38l-11-36Z" fill="#071a22"/>
+  <path d="m373 150-30 22m68-22 30 22m-79-39-27-18m84 18 27-18" fill="none" stroke="#071a22" stroke-width="9" stroke-linecap="round"/>
+  <path d="M104 354 178 170h54l74 184h-58l-12-34h-65l-12 34h-55Zm84-82h31l-15-45-16 45Z" fill="#f8fafc"/>
+  <path d="M322 358c-38 0-70-12-94-34l30-38c20 17 42 26 65 26 14 0 22-4 22-12 0-9-9-12-38-19-43-10-72-24-72-65 0-38 30-64 78-64 34 0 60 9 82 27l-27 40c-18-13-38-20-57-20-12 0-18 5-18 11 0 10 10 13 39 20 47 10 71 27 71 63 0 42-33 65-81 65Z" fill="#f8fafc"/>
+  <path d="M108 420c55 30 111 45 169 45 61 0 111-18 151-54" fill="none" stroke="#f5c542" stroke-width="20" stroke-linecap="round"/>
+</svg>

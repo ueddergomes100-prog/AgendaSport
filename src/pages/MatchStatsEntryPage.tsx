@@ -1,0 +1,253 @@
+import { useMemo, useState, type FormEvent } from 'react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
+import { ArrowLeft, CheckCircle2, ClipboardList, LoaderCircle, Save, Users } from 'lucide-react'
+import { Button } from '../components/ui/button'
+import { Card, CardTitle } from '../components/ui/card'
+import { Input } from '../components/ui/field'
+import { AnimatedPage } from '../components/ui/sport'
+import {
+  createMatch,
+  getAttendance,
+  getLatestTeamDraw,
+  getMatchPlayerStats,
+  getMatches,
+  getPickups,
+  savePostMatchStats,
+  upsertAttendance,
+} from '../lib/data'
+import type { Match } from '../lib/types'
+import { getErrorMessage } from '../lib/utils'
+
+const weekdays = ['Domingo', 'Segunda', 'Terca', 'Quarta', 'Quinta', 'Sexta', 'Sabado']
+
+export function MatchStatsEntryPage() {
+  const { matchId = '' } = useParams()
+  const navigate = useNavigate()
+  const matches = useQuery({ queryKey: ['matches'], queryFn: getMatches })
+  const pickups = useQuery({ queryKey: ['pickups'], queryFn: getPickups })
+  const attendance = useQuery({ queryKey: ['attendance', matchId], queryFn: () => getAttendance(matchId), enabled: Boolean(matchId) })
+  const matchStats = useQuery({ queryKey: ['match-player-stats', matchId], queryFn: () => getMatchPlayerStats(matchId), enabled: Boolean(matchId) })
+  const latestTeamDraw = useQuery({ queryKey: ['latest-team-draw', matchId], queryFn: () => getLatestTeamDraw(matchId), enabled: Boolean(matchId) })
+  const [saving, setSaving] = useState(false)
+  const [feedback, setFeedback] = useState('')
+
+  const selectedMatch = useMemo(() => (matches.data ?? []).find((match) => match.id === matchId) ?? null, [matches.data, matchId])
+  const selectedPickup = useMemo(() => (pickups.data ?? []).find((pickup) => pickup.id === selectedMatch?.pickup_id) ?? null, [pickups.data, selectedMatch])
+  const statsByPlayerId = useMemo(() => new Map((matchStats.data ?? []).map((row) => [row.player_id, row] as const)), [matchStats.data])
+  const rows = useMemo(
+    () => (attendance.data ?? []).filter((row) => ['CONFIRMADO', 'COMPARECEU', 'FALTOU'].includes(row.status) && row.player),
+    [attendance.data],
+  )
+  const canLaunchStats = selectedMatch ? isSameLocalDate(new Date(selectedMatch.scheduled_at), new Date()) : false
+  const totals = rows.reduce(
+    (acc, item) => {
+      const saved = statsByPlayerId.get(item.player_id)
+      acc.points += saved?.goals ?? 0
+      acc.assists += saved?.assists ?? 0
+      if (saved?.present ?? item.status !== 'FALTOU') acc.present += 1
+      return acc
+    },
+    { present: 0, points: 0, assists: 0 },
+  )
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!selectedMatch) return
+    if (!canLaunchStats) {
+      setFeedback('O lancamento de presenca real e estatisticas so fica liberado no dia do evento.')
+      return
+    }
+
+    const form = new FormData(event.currentTarget)
+    const statRows = rows.map((item) => ({
+      playerId: item.player_id,
+      present: form.get(`present-${item.player_id}`) === 'on',
+      goals: Number(form.get(`goals-${item.player_id}`) || 0),
+      assists: Number(form.get(`assists-${item.player_id}`) || 0),
+      wins: 0,
+      draws: 0,
+      losses: 0,
+    }))
+
+    setSaving(true)
+    setFeedback('')
+    try {
+      await Promise.all(statRows.map((row) => upsertAttendance(selectedMatch.id, row.playerId, row.present ? 'COMPARECEU' : 'FALTOU')))
+      await savePostMatchStats(
+        selectedMatch.id,
+        {
+          team_a_score: null,
+          team_b_score: null,
+          team_results: latestTeamDraw.data?.payload?.teams?.map((team) => ({
+            id: team.id,
+            name: team.name,
+            score: 0,
+            playerIds: team.players.map((player) => player.id),
+          })) ?? [],
+          status: 'ENCERRADA',
+        },
+        statRows,
+      )
+
+      let nextMatch: Match | null = null
+      if (selectedPickup && window.confirm(`Estatisticas salvas. Ja quer agendar automaticamente a proxima ${weekdays[selectedPickup.weekday]}?`)) {
+        nextMatch = await createMatch({
+          pickup_id: selectedPickup.id,
+          scheduled_at: getNextPickupDate(selectedPickup.weekday, selectedPickup.start_time, new Date(selectedMatch.scheduled_at)),
+          status: 'AGENDADA',
+          notes: `Agenda automatica: ${selectedPickup.name}`,
+        })
+      }
+
+      await Promise.all([matches.refetch(), attendance.refetch(), matchStats.refetch()])
+      setFeedback(nextMatch ? 'Estatisticas salvas e proximo evento agendado.' : 'Estatisticas salvas com sucesso.')
+      if (nextMatch) navigate(`/lancamento/${nextMatch.id}`)
+    } catch (error) {
+      setFeedback(getErrorMessage(error, 'Nao foi possivel salvar as estatisticas.'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (matches.isLoading || pickups.isLoading) {
+    return (
+      <AnimatedPage>
+        <Card className="grid min-h-80 place-items-center text-center">
+          <LoaderCircle className="animate-spin text-primary" size={28} />
+          <p className="font-black">Carregando sumula...</p>
+        </Card>
+      </AnimatedPage>
+    )
+  }
+
+  if (!selectedMatch) {
+    return (
+      <AnimatedPage>
+        <Card className="grid min-h-80 place-items-center text-center">
+          <ClipboardList className="text-primary" size={36} />
+          <h1 className="mt-3 text-2xl font-black">Evento nao encontrado</h1>
+          <p className="mt-2 text-sm text-muted-foreground">Volte para a Agenda e abra um link de lancamento valido.</p>
+          <Button asChild className="mt-5">
+            <Link to="/agenda">
+              <ArrowLeft size={16} />
+              Voltar para Agenda
+            </Link>
+          </Button>
+        </Card>
+      </AnimatedPage>
+    )
+  }
+
+  return (
+    <AnimatedPage>
+      <section className="football-surface overflow-hidden rounded-2xl p-6 text-white shadow-xl shadow-green-950/15">
+        <div className="stadium-lights" />
+        <div className="relative z-10 grid gap-5 lg:grid-cols-[1fr_auto] lg:items-end">
+          <div>
+            <span className="rounded-md bg-white/15 px-2 py-1 text-xs font-black uppercase tracking-wide">Sumula digital</span>
+            <h1 className="mt-4 text-3xl font-black">{selectedPickup?.name || selectedMatch.notes || 'Evento avulso'}</h1>
+            <p className="mt-2 text-sm text-white/75">{formatDateTime(selectedMatch.scheduled_at)}</p>
+            <p className="mt-1 text-sm text-white/75">{selectedPickup ? `${selectedPickup.place} - capacidade ${selectedPickup.max_players}` : 'Lancamento individual'}</p>
+          </div>
+          <Button asChild variant="secondary" className="bg-white/90 text-slate-950 hover:bg-white">
+            <Link to="/agenda">
+              <ArrowLeft size={16} />
+              Agenda
+            </Link>
+          </Button>
+        </div>
+      </section>
+
+      <section className="grid gap-4 md:grid-cols-3">
+        <Card><Summary icon={<Users size={18} />} label="Participantes" value={rows.length} /></Card>
+        <Card><Summary icon={<CheckCircle2 size={18} />} label="Presentes" value={totals.present} /></Card>
+        <Card><Summary icon={<ClipboardList size={18} />} label="Pontos" value={totals.points} /></Card>
+      </section>
+
+      <Card>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <CardTitle className="text-xl font-black">Lancamento dos participantes</CardTitle>
+            <p className="mt-1 text-sm text-muted-foreground">Informe presenca, pontos e assistencias. Serve para diferentes modalidades esportivas.</p>
+          </div>
+          <span className="rounded-md bg-muted px-2 py-1 text-xs font-black">{canLaunchStats ? `${rows.length} elegiveis` : 'Liberado no dia do evento'}</span>
+        </div>
+
+        {feedback && <p className="mt-4 rounded-md bg-muted px-3 py-2 text-sm font-semibold text-slate-700 dark:text-slate-200">{feedback}</p>}
+        {!canLaunchStats && (
+          <p className="mt-4 rounded-lg border border-yellow-200 bg-yellow-50 px-4 py-3 text-sm font-semibold text-yellow-950 dark:border-yellow-900/50 dark:bg-yellow-950/30 dark:text-yellow-100">
+            Este link ja pode ser compartilhado, mas o lancamento real so abre no dia do evento.
+          </p>
+        )}
+
+        <form key={`${matchId}-${matchStats.dataUpdatedAt}`} className="mt-4 grid gap-4" onSubmit={submit}>
+          <div className="grid gap-3">
+            {rows.map((item) => {
+              const saved = statsByPlayerId.get(item.player_id)
+              return (
+                <div key={item.id} className="grid gap-3 rounded-xl border border-border bg-white/75 p-4 dark:bg-slate-950/40 lg:grid-cols-[1fr_130px_150px_150px] lg:items-center">
+                  <div className="min-w-0">
+                    <p className="truncate text-lg font-black">{item.player?.name ?? 'Participante'}</p>
+                    <p className="text-sm text-muted-foreground">{item.player?.primary_position ?? '-'} - {item.player?.whatsapp ?? 'Sem WhatsApp'}</p>
+                  </div>
+                  <label className="flex items-center gap-2 rounded-lg bg-muted px-3 py-2 text-sm font-black">
+                    <input name={`present-${item.player_id}`} type="checkbox" defaultChecked={saved?.present ?? item.status !== 'FALTOU'} disabled={!canLaunchStats} className="size-4 accent-green-700" />
+                    Presente
+                  </label>
+                  <label className="grid gap-1 text-sm font-black text-slate-700 dark:text-slate-200">
+                    Pontos
+                    <Input name={`goals-${item.player_id}`} type="number" min={0} defaultValue={saved?.goals ?? 0} disabled={!canLaunchStats} />
+                  </label>
+                  <label className="grid gap-1 text-sm font-black text-slate-700 dark:text-slate-200">
+                    Assistencias
+                    <Input name={`assists-${item.player_id}`} type="number" min={0} defaultValue={saved?.assists ?? 0} disabled={!canLaunchStats} />
+                  </label>
+                </div>
+              )
+            })}
+            {!rows.length && (
+              <div className="rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
+                Confirme participantes na Agenda antes de lancar as estatisticas.
+              </div>
+            )}
+          </div>
+          <Button className="min-h-12" disabled={saving || !rows.length || !canLaunchStats}>
+            {saving ? <LoaderCircle className="animate-spin" size={16} /> : <Save size={16} />}
+            {saving ? 'Salvando...' : 'Salvar estatisticas'}
+          </Button>
+        </form>
+      </Card>
+    </AnimatedPage>
+  )
+}
+
+function Summary({ icon, label, value }: { icon: React.ReactNode; label: string; value: number }) {
+  return (
+    <div className="flex items-center gap-3">
+      <div className="grid size-11 place-items-center rounded-xl bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-100">{icon}</div>
+      <div>
+        <p className="text-sm text-muted-foreground">{label}</p>
+        <p className="text-2xl font-black">{value}</p>
+      </div>
+    </div>
+  )
+}
+
+function formatDateTime(value: string) {
+  return new Date(value).toLocaleString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+function getNextPickupDate(weekday: number, startTime: string, from: Date) {
+  const [hours, minutes] = startTime.split(':').map(Number)
+  const date = new Date(from)
+  const daysAhead = (weekday - date.getDay() + 7) % 7
+  date.setDate(date.getDate() + daysAhead)
+  date.setHours(hours || 0, minutes || 0, 0, 0)
+  if (date <= from) date.setDate(date.getDate() + 7)
+  return date.toISOString()
+}
+
+function isSameLocalDate(left: Date, right: Date) {
+  return left.getFullYear() === right.getFullYear() && left.getMonth() === right.getMonth() && left.getDate() === right.getDate()
+}
