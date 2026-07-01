@@ -8,6 +8,12 @@ import { SportBackground } from '../components/login/SportBackground'
 import { supabase } from '../lib/supabase'
 import { getErrorMessage } from '../lib/utils'
 
+const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
+
+function apiUrl(path: string) {
+  return `${apiBaseUrl}${path}`
+}
+
 export function LoginPage() {
   const navigate = useNavigate()
   const [mode, setMode] = useState<'login' | 'signup' | 'recover'>('login')
@@ -29,13 +35,21 @@ export function LoginPage() {
         return
       }
       if (mode === 'signup') {
-        const { error } = await supabase.auth.signUp({
-          email,
-          password,
-          options: { data: { full_name: fullName } },
+        const response = await fetch(apiUrl('/api/onboarding/signup'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            full_name: fullName,
+            email,
+            password,
+          }),
         })
+        const payload = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(payload.error ?? 'Nao foi possivel criar o cadastro.')
+
+        const { error } = await supabase.auth.signInWithPassword({ email, password })
         if (error) throw error
-        setMessage('Cadastro criado. Verifique seu email se a confirmacao estiver ativa no Supabase.')
+        navigate('/')
         return
       }
       const { error } = await supabase.auth.signInWithPassword({ email, password })

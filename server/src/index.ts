@@ -21,6 +21,17 @@ const __dirname = path.dirname(__filename)
 const clientDistPath = path.resolve(__dirname, '../../dist')
 const clientIndexPath = path.join(clientDistPath, 'index.html')
 
+type SignupCompanyInput = {
+  name: string
+  responsibleName: string
+  email: string
+}
+
+type SignupCompany = {
+  id: string
+  name: string
+}
+
 app.use(helmet())
 app.use(cors({ origin: corsOrigins.length > 1 ? corsOrigins : corsOrigins[0], credentials: true }))
 app.use(express.json({ limit: '1mb' }))
@@ -31,6 +42,105 @@ app.get('/api/health', (_req, res) => {
 })
 
 app.use('/api/webhooks', whatsappWebhookRouter)
+
+async function createSignupCompany(input: SignupCompanyInput): Promise<SignupCompany> {
+  const currentSchemaPayload = {
+    name: input.name,
+    responsible_name: input.responsibleName,
+    email: input.email,
+    phone: null,
+    whatsapp: null,
+    city: null,
+    state: null,
+    plan_code: 'Starter',
+    status: 'ATIVA',
+  }
+
+  const { data, error } = await adminSupabase
+    .from('companies')
+    .insert(currentSchemaPayload)
+    .select('id, name')
+    .single()
+
+  if (!error && data) return data
+
+  const legacySchemaPayload = {
+    name: input.name,
+    email: input.email,
+    phone: null,
+    plan: 'Starter',
+    status: 'ATIVO',
+  }
+
+  const { data: legacyData, error: legacyError } = await adminSupabase
+    .from('companies')
+    .insert(legacySchemaPayload)
+    .select('id, name')
+    .single()
+
+  if (legacyError) throw legacyError
+  return legacyData
+}
+
+app.post('/api/onboarding/signup', async (req, res) => {
+  const schema = z.object({
+    full_name: z.string().min(2).max(120),
+    email: z.string().email(),
+    password: z.string().min(6).max(128),
+  })
+  const input = schema.parse(req.body)
+  const companyName = `Agenda ${input.full_name}`.slice(0, 120)
+
+  let companyId: string | null = null
+  let userId: string | null = null
+
+  try {
+    const company = await createSignupCompany({
+      name: companyName,
+      responsibleName: input.full_name,
+      email: input.email,
+    })
+    companyId = company.id
+
+    const { data: created, error: createError } = await adminSupabase.auth.admin.createUser({
+      email: input.email,
+      password: input.password,
+      email_confirm: true,
+      user_metadata: { full_name: input.full_name, company_name: company.name },
+    })
+
+    if (createError || !created.user) {
+      throw new Error(createError?.message ?? 'Nao foi possivel criar o usuario.')
+    }
+
+    userId = created.user.id
+    const { error: profileError } = await adminSupabase.from('profiles').upsert(
+      {
+        id: userId,
+        tenant_id: companyId,
+        full_name: input.full_name,
+        role: 'ADMINISTRADOR',
+      },
+      { onConflict: 'id' },
+    )
+
+    if (profileError) throw profileError
+
+    return res.status(201).json({
+      user_id: userId,
+      tenant_id: companyId,
+      email: input.email,
+      company_name: company.name,
+    })
+  } catch (error) {
+    if (userId) await adminSupabase.auth.admin.deleteUser(userId).catch(() => null)
+    if (companyId) {
+      const { error: cleanupError } = await adminSupabase.from('companies').delete().eq('id', companyId)
+      if (cleanupError) console.warn('Nao foi possivel limpar empresa apos falha no onboarding.', cleanupError)
+    }
+    return res.status(400).json({ error: error instanceof Error ? error.message : 'Nao foi possivel criar o cadastro.' })
+  }
+})
 
 function requireRequestTenantId(user: AuthUser) {
   if (user.tenant_id) return user.tenant_id
