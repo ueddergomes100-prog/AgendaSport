@@ -16,6 +16,12 @@ Start command: npm start
 Application URL: https://agendasport.com.br
 ```
 
+Se `NODE_ENV=production` estiver configurado nas variaveis de ambiente, use este build command para garantir que TypeScript/Vite sejam instalados no build:
+
+```text
+npm ci --include=dev && npm run build:hostinger
+```
+
 Se a Hostinger pedir `Application root`, use a raiz do repositorio.
 
 ## Variaveis de ambiente
@@ -85,4 +91,3 @@ messages
 5. Convocar participantes.
 6. Responder SIM, NAO e ESPERA pelo WhatsApp.
 7. Conferir a resposta na Agenda.
-

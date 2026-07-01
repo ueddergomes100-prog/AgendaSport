@@ -140,3 +140,14 @@ Checklist:
 - CORS sem erro no console.
 - Meta webhook usando URL definitiva, nao trycloudflare.
 
+## Hostinger Node.js App
+
+Se publicar tudo em um unico app Node.js na Hostinger, use:
+
+```text
+Build command: npm ci --include=dev && npm run build:hostinger
+Start command: npm start
+Node.js: 22 LTS
+```
+
+O `--include=dev` e necessario porque `typescript`, `vite` e outras ferramentas de build ficam em `devDependencies`.
