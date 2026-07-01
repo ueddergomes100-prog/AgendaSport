@@ -3,12 +3,18 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "engines": {
+    "node": ">=22 <23",
+    "npm": ">=10"
+  },
   "scripts": {
     "dev": "vite",
     "dev:api": "tsx watch server/src/index.ts",
     "dev:all": "npm-run-all --parallel dev dev:api",
     "build": "tsc -b && vite build",
     "build:api": "tsc -p server/tsconfig.json",
+    "build:hostinger": "npm run build && npm run build:api",
+    "start": "node server/dist/index.js",
     "start:api": "node server/dist/index.js",
     "predeploy:check": "npm run lint && npm run build && npm run build:api",
     "lint": "eslint .",

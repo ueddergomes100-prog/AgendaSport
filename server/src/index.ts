@@ -2,6 +2,9 @@ import cors from 'cors'
 import express from 'express'
 import helmet from 'helmet'
 import rateLimit from 'express-rate-limit'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 import { env } from './env.js'
 import { requireAuth, requireSuperAdmin } from './auth.js'
@@ -13,6 +16,10 @@ import { confirmationReminderStages, runConfirmationReminderJob, sendConfirmatio
 const app = express()
 type AuthUser = { id: string; tenant_id: string | null; role: string }
 const corsOrigins = env.CORS_ORIGIN.split(',').map((origin) => origin.trim()).filter(Boolean)
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+const clientDistPath = path.resolve(__dirname, '../../dist')
+const clientIndexPath = path.join(clientDistPath, 'index.html')
 
 app.use(helmet())
 app.use(cors({ origin: corsOrigins.length > 1 ? corsOrigins : corsOrigins[0], credentials: true }))
@@ -173,6 +180,13 @@ app.post('/api/backups/manual', requireAuth, requireSuperAdmin, async (_req, res
   if (error) return res.status(500).json({ error: error.message })
   return res.status(201).json(data)
 })
+
+if (fs.existsSync(clientIndexPath)) {
+  app.use(express.static(clientDistPath))
+  app.get(/^(?!\/api).*/, (_req, res) => {
+    res.sendFile(clientIndexPath)
+  })
+}
 
 app.listen(env.PORT, () => {
   console.log(`Agenda Sport API running on http://localhost:${env.PORT}`)
