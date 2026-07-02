@@ -358,7 +358,7 @@ export async function runConfirmationReminderJob(options: { tenantId?: string | 
 
 export async function sendConfirmationForMatch(matchId: string, tenantId?: string | null): Promise<MatchConfirmationSummary> {
   const match = await getMatchForConfirmation(matchId, tenantId)
-  const template = 'CONFIRMACAO_MANUAL'
+  const template = `CONFIRMACAO_MANUAL_${Date.now()}`
   const summary: MatchConfirmationSummary = {
     matchId: match.id,
     invitationsCreated: 0,
@@ -404,12 +404,20 @@ export async function sendConfirmationForMatch(matchId: string, tenantId?: strin
       summary.errors.push({
         matchId: match.id,
         playerId: attendance.player_id,
-        message: sendError instanceof Error ? sendError.message : 'Falha ao enviar convocacao.',
+        message: getErrorMessage(sendError, 'Falha ao enviar convocacao.'),
       })
     }
   }
 
   return summary
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error) return error.message
+  if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') {
+    return error.message
+  }
+  return fallback
 }
 
 let running = false
