@@ -69,6 +69,7 @@ const inboundMessageSchema = z.object({
                           button_reply: z.object({ id: z.string().optional(), title: z.string().optional() }).optional(),
                         })
                         .optional(),
+                      context: z.object({ id: z.string().optional(), from: z.string().optional() }).optional(),
                       type: z.string().optional(),
                     }),
                   )
@@ -165,7 +166,12 @@ whatsappWebhookRouter.post('/whatsapp', async (req, res) => {
           metadata: {
             phone_number_id: phoneNumberId,
             timestamp: message.timestamp,
+            message_id: message.id,
+            context: message.context,
             raw_type: message.type,
+            button: message.button,
+            interactive: message.interactive,
+            text: message.text,
             attendance_reply: replyStatus,
             handled: processing?.handled ?? false,
             reason: processing?.reason,
@@ -259,18 +265,18 @@ async function processAttendanceReply(fromPhone: string, replyStatus: Attendance
     }
   }
 
-  if (players.length > 1) {
-    return {
-      status: 'RECEIVED',
-      response: 'Multiple players matched inbound phone',
-      handled: false,
-      reason: 'ambiguous_player_phone',
-    }
-  }
-
-  const player = players[0]
-  const attendance = await findNextActiveAttendance(player.id)
+  const attendance = await findBestActiveAttendanceForPlayers(players)
   if (!attendance) {
+    if (players.length > 1) {
+      return {
+        status: 'RECEIVED',
+        response: 'Multiple players matched inbound phone and no active attendance could disambiguate',
+        handled: false,
+        reason: 'ambiguous_player_phone',
+      }
+    }
+
+    const player = players[0]
     return {
       tenantId: player.tenant_id,
       playerId: player.id,
@@ -420,11 +426,46 @@ async function findPlayersByPhone(fromPhone: string): Promise<PlayerCandidate[]>
 function phoneMatchScore(playerPhone: string | null, inboundDigits: string) {
   const playerDigits = onlyDigits(playerPhone ?? '')
   if (playerDigits.length < 8 || inboundDigits.length < 8) return 0
-  if (playerDigits === inboundDigits) return 4
-  if (inboundDigits.endsWith(playerDigits) || playerDigits.endsWith(inboundDigits)) return 3
-  if (inboundDigits.endsWith(playerDigits.slice(-10))) return 2
-  if (inboundDigits.endsWith(playerDigits.slice(-8))) return 1
+
+  const playerVariants = phoneVariants(playerDigits)
+  const inboundVariants = phoneVariants(inboundDigits)
+  for (const playerVariant of playerVariants) {
+    for (const inboundVariant of inboundVariants) {
+      if (playerVariant === inboundVariant) return 5
+      if (inboundVariant.endsWith(playerVariant) || playerVariant.endsWith(inboundVariant)) return 4
+      if (inboundVariant.endsWith(playerVariant.slice(-10)) || playerVariant.endsWith(inboundVariant.slice(-10))) return 3
+      if (inboundVariant.endsWith(playerVariant.slice(-8)) || playerVariant.endsWith(inboundVariant.slice(-8))) return 1
+    }
+  }
+
   return 0
+}
+
+function phoneVariants(digits: string) {
+  const values = new Set<string>()
+  const add = (value: string) => {
+    if (value.length >= 8) values.add(value)
+  }
+
+  add(digits)
+
+  const withoutCountry = digits.startsWith('55') ? digits.slice(2) : digits
+  add(withoutCountry)
+  add(`55${withoutCountry}`)
+
+  if (withoutCountry.length === 11 && withoutCountry[2] === '9') {
+    const withoutMobileNine = `${withoutCountry.slice(0, 2)}${withoutCountry.slice(3)}`
+    add(withoutMobileNine)
+    add(`55${withoutMobileNine}`)
+  }
+
+  if (withoutCountry.length === 10) {
+    const withMobileNine = `${withoutCountry.slice(0, 2)}9${withoutCountry.slice(2)}`
+    add(withMobileNine)
+    add(`55${withMobileNine}`)
+  }
+
+  return Array.from(values)
 }
 
 function onlyDigits(value: string) {
@@ -437,19 +478,40 @@ function maskPhone(value: string) {
   return `${digits.slice(0, 4)}***${digits.slice(-4)}`
 }
 
-async function findNextActiveAttendance(playerId: string): Promise<AttendanceCandidate | null> {
+async function findBestActiveAttendanceForPlayers(players: PlayerCandidate[]): Promise<AttendanceCandidate | null> {
+  if (!players.length) return null
+
+  const playerIds = players.map((player) => player.id)
   const { data, error } = await adminSupabase
     .from('attendance')
     .select('id, tenant_id, match_id, player_id, status, match:matches!inner(id, scheduled_at, status)')
-    .eq('player_id', playerId)
+    .in('player_id', playerIds)
     .in('status', ['CONVIDADO', 'CONFIRMADO', 'ESPERA'])
-    .gte('match.scheduled_at', new Date().toISOString())
     .neq('match.status', 'ENCERRADA')
     .neq('match.status', 'CANCELADA')
 
   if (error) throw error
 
-  return ((data ?? []) as unknown as AttendanceCandidate[]).sort(
-    (a, b) => new Date(a.match?.scheduled_at ?? 0).getTime() - new Date(b.match?.scheduled_at ?? 0).getTime(),
-  )[0] ?? null
+  return ((data ?? []) as unknown as AttendanceCandidate[]).sort(compareAttendanceCandidates)[0] ?? null
+}
+
+function compareAttendanceCandidates(a: AttendanceCandidate, b: AttendanceCandidate) {
+  const statusDelta = attendanceStatusPriority(a.status) - attendanceStatusPriority(b.status)
+  if (statusDelta !== 0) return statusDelta
+
+  const now = Date.now()
+  const aTime = new Date(a.match?.scheduled_at ?? 0).getTime()
+  const bTime = new Date(b.match?.scheduled_at ?? 0).getTime()
+  const aFuture = aTime >= now
+  const bFuture = bTime >= now
+
+  if (aFuture !== bFuture) return aFuture ? -1 : 1
+  return aFuture ? aTime - bTime : bTime - aTime
+}
+
+function attendanceStatusPriority(status: string) {
+  if (status === 'CONVIDADO') return 0
+  if (status === 'ESPERA') return 1
+  if (status === 'CONFIRMADO') return 2
+  return 3
 }
