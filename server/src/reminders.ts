@@ -374,14 +374,8 @@ export async function sendConfirmationForMatch(matchId: string, tenantId?: strin
 
   summary.invitationsCreated = await ensureInvitations(match)
   const pendingAttendance = await getPendingAttendance(match.id)
-  const alreadySent = await getAlreadySentPlayerIds(match.id, template)
 
   for (const attendance of pendingAttendance) {
-    if (alreadySent.has(attendance.player_id)) {
-      summary.skippedAlreadySent += 1
-      continue
-    }
-
     const phone = attendance.player?.whatsapp?.replace(/\D/g, '')
     if (!phone) {
       summary.skippedWithoutWhatsapp += 1
@@ -390,10 +384,6 @@ export async function sendConfirmationForMatch(matchId: string, tenantId?: strin
 
     try {
       const message = buildConfirmationMessage(match, attendance, confirmationReminderStages[0])
-      if (await wasConfirmationAlreadySent(match, attendance, template, message)) {
-        summary.skippedAlreadySent += 1
-        continue
-      }
       await sendWhatsAppMessage({
         tenant_id: match.tenant_id,
         match_id: match.id,
