@@ -8,6 +8,8 @@ export const confirmationReminderStages = [
   { hoursBefore: 24, template: 'CONFIRMACAO_24H', label: '24h' },
 ] as const
 
+const EVENT_TIME_ZONE = 'America/Sao_Paulo'
+
 type ReminderStage = (typeof confirmationReminderStages)[number]
 
 type PickupRow = {
@@ -71,6 +73,7 @@ function currentReminderStage(scheduledAt: string, now: Date): ReminderStage | n
 
 function formatDateTime(value: string) {
   return new Date(value).toLocaleString('pt-BR', {
+    timeZone: EVENT_TIME_ZONE,
     weekday: 'long',
     day: '2-digit',
     month: '2-digit',
@@ -81,6 +84,7 @@ function formatDateTime(value: string) {
 
 function formatDate(value: string) {
   return new Date(value).toLocaleDateString('pt-BR', {
+    timeZone: EVENT_TIME_ZONE,
     weekday: 'short',
     day: '2-digit',
     month: '2-digit',
@@ -89,6 +93,7 @@ function formatDate(value: string) {
 
 function formatTime(value: string) {
   return new Date(value).toLocaleTimeString('pt-BR', {
+    timeZone: EVENT_TIME_ZONE,
     hour: '2-digit',
     minute: '2-digit',
   })
