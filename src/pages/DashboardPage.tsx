@@ -7,10 +7,12 @@ import { Card, CardTitle } from '../components/ui/card'
 import { AnimatedNumber } from '../components/ui/animated-number'
 import { AnimatedPage } from '../components/ui/sport'
 import { getCompanies, getDashboardStats, getMatches, getPlayerStats, getProfile } from '../lib/data'
+import { usePrimaryStatLabel } from '../lib/stats-labels'
 import { money } from '../lib/utils'
 
 export function DashboardPage() {
   const profile = useQuery({ queryKey: ['profile'], queryFn: getProfile })
+  const primaryStat = usePrimaryStatLabel()
   const stats = useQuery({ queryKey: ['dashboard'], queryFn: getDashboardStats })
   const matches = useQuery({ queryKey: ['matches'], queryFn: getMatches })
   const companies = useQuery({ queryKey: ['companies'], queryFn: getCompanies, enabled: profile.data?.role === 'SUPER_ADMIN' })
@@ -18,7 +20,7 @@ export function DashboardPage() {
   const chartData = (matches.data ?? []).slice(0, 8).reverse().map((match) => ({
     name: new Date(match.scheduled_at).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }),
     presencas: (playerStats.data ?? []).filter((row) => row.match_id === match.id && row.present).length,
-    pontos: (playerStats.data ?? []).filter((row) => row.match_id === match.id).reduce((sum, row) => sum + (row.goals ?? 0), 0),
+    indicador: (playerStats.data ?? []).filter((row) => row.match_id === match.id).reduce((sum, row) => sum + (row.goals ?? 0), 0),
   }))
 
   if (profile.data?.role === 'SUPER_ADMIN') {
@@ -183,7 +185,7 @@ export function DashboardPage() {
       </section>
       <Card className="overflow-hidden p-0">
         <div className="border-b border-border p-5">
-          <CardTitle className="text-xl font-black">Participacao e pontos</CardTitle>
+          <CardTitle className="text-xl font-black">Participacao e {primaryStat.labels.lowerPlural}</CardTitle>
           <p className="mt-1 text-sm text-muted-foreground">Historico recente dos eventos encerrados com estatisticas individuais.</p>
         </div>
         <div className="h-80 p-5">
@@ -194,7 +196,7 @@ export function DashboardPage() {
               <YAxis />
               <Tooltip />
               <Area dataKey="presencas" stroke="#0f766e" fill="#99f6e4" />
-              <Area dataKey="pontos" stroke="#d97706" fill="#fed7aa" />
+              <Area dataKey="indicador" name={primaryStat.labels.plural} stroke="#d97706" fill="#fed7aa" />
             </AreaChart>
           </ResponsiveContainer>
         </div>

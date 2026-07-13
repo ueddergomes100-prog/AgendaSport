@@ -35,6 +35,7 @@ import {
   upsertAttendance,
 } from '../lib/data'
 import { displayPosition, isGoalkeeperPosition } from '../lib/positions'
+import { usePrimaryStatLabel } from '../lib/stats-labels'
 import type { Attendance, AttendanceStatus, Match, Pickup } from '../lib/types'
 import { cn, getErrorMessage } from '../lib/utils'
 
@@ -67,6 +68,7 @@ export function SchedulePage() {
   const [deletingMatch, setDeletingMatch] = useState(false)
   const [matchToDelete, setMatchToDelete] = useState<Match | null>(null)
   const [feedback, setFeedback] = useState('')
+  const { labels: primaryStatLabels } = usePrimaryStatLabel()
   const effectiveSelectedMatchId = selectedMatchId || matches.data?.[0]?.id || ''
 
   const selectedMatch = useMemo(
@@ -489,7 +491,7 @@ export function SchedulePage() {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <CardTitle>Lancamento individual</CardTitle>
-                    <p className="mt-1 text-sm text-muted-foreground">No dia do evento, marque quem realmente compareceu e informe pontos e assistencias.</p>
+                    <p className="mt-1 text-sm text-muted-foreground">No dia do evento, marque quem realmente compareceu e informe {primaryStatLabels.lowerPlural} e assistencias.</p>
                   </div>
                   <span className="rounded-md bg-muted px-2 py-1 text-xs font-black">{canLaunchStats ? `${presentCandidates.length} participantes elegiveis` : 'Liberado no dia do evento'}</span>
                 </div>
@@ -521,7 +523,7 @@ export function SchedulePage() {
                           </label>
                           <div className="grid min-w-0 grid-cols-2 gap-2 sm:gap-3">
                             <label className="grid min-w-0 gap-1 text-sm font-black text-slate-700 dark:text-slate-200">
-                              Pontos
+                              {primaryStatLabels.plural}
                               <Input className="h-12 text-base font-black" name={`goals-${item.player_id}`} type="number" inputMode="numeric" min={0} defaultValue={saved?.goals ?? 0} disabled={!canLaunchStats} />
                             </label>
                             <label className="grid min-w-0 gap-1 text-sm font-black text-slate-700 dark:text-slate-200">

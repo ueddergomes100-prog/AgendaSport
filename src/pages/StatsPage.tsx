@@ -8,6 +8,7 @@ import { Select } from '../components/ui/field'
 import { AnimatedPage } from '../components/ui/sport'
 import { getCurrentCompany, getPlayerStats } from '../lib/data'
 import { displayPosition } from '../lib/positions'
+import { usePrimaryStatLabel, type PrimaryStatLabel } from '../lib/stats-labels'
 import type { PlayerStatRow } from '../lib/types'
 
 type Period = 'day' | 'month' | 'year' | 'all'
@@ -56,6 +57,7 @@ function aggregate(rows: PlayerStatRow[]) {
 
 export function StatsPage() {
   const [period, setPeriod] = useState<Period>('month')
+  const primaryStat = usePrimaryStatLabel()
   const stats = useQuery({ queryKey: ['player-stats'], queryFn: getPlayerStats })
   const company = useQuery({ queryKey: ['current-company'], queryFn: getCurrentCompany })
 
@@ -68,16 +70,16 @@ export function StatsPage() {
   const uniqueMatches = new Set(filteredRows.map((row) => row.match_id)).size
   const totalGoals = filteredRows.reduce((sum, row) => sum + (row.goals ?? 0), 0)
   const totalAssists = filteredRows.reduce((sum, row) => sum + (row.assists ?? 0), 0)
-  const chartData = scorers.slice(0, 8).map((player) => ({ name: player.name.split(' ')[0], pontos: player.goals, assistencias: player.assists }))
+  const chartData = scorers.slice(0, 8).map((player) => ({ name: player.name.split(' ')[0], indicador: player.goals, assistencias: player.assists }))
 
   const whatsappSummary = [
     `RELATORIO AGENDA SPORT - ${company.data?.name ?? 'Evento'}`,
     `Periodo: ${periodLabels[period]}`,
     '',
-    `Destaque em pontos: ${topScorer ? `${topScorer.name} (${topScorer.goals})` : '-'}`,
+    `Destaque em ${primaryStat.labels.lowerPlural}: ${topScorer ? `${topScorer.name} (${topScorer.goals})` : '-'}`,
     `Garcom: ${topAssistant ? `${topAssistant.name} (${topAssistant.assists} assist.)` : '-'}`,
     '',
-    'Top pontos:',
+    `Top ${primaryStat.labels.lowerPlural}:`,
     ...scorers.slice(0, 5).map((player, index) => `${index + 1}. ${player.name} - ${player.goals}`),
     '',
     'Top assistentes:',
@@ -98,17 +100,21 @@ export function StatsPage() {
         <div className="grid gap-6 lg:grid-cols-[1fr_auto] lg:items-center">
           <div>
             <span className="page-kicker"><Trophy size={14} /> Relatorio esportivo</span>
-            <h1 className="mt-4 max-w-3xl text-3xl font-black tracking-tight md:text-4xl">Pontos, assistencias e presenca dos participantes</h1>
+            <h1 className="mt-4 max-w-3xl text-3xl font-black tracking-tight md:text-4xl">{primaryStat.labels.plural}, assistencias e presenca dos participantes</h1>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">
               Um painel para acompanhar desempenho individual em diferentes modalidades esportivas.
             </p>
           </div>
-          <div className="grid w-full min-w-56 gap-2 sm:grid-cols-[1fr_auto_auto]">
+          <div className="grid w-full min-w-56 gap-2 sm:grid-cols-2 xl:w-[640px] xl:grid-cols-[1fr_1fr_auto_auto]">
             <Select value={period} onChange={(event) => setPeriod(event.target.value as Period)}>
               <option value="day">Hoje</option>
               <option value="month">Mes atual</option>
               <option value="year">Ano atual</option>
               <option value="all">Historico geral</option>
+            </Select>
+            <Select value={primaryStat.preference} onChange={(event) => primaryStat.setPreference(event.target.value as PrimaryStatLabel)}>
+              <option value="PONTOS">Nomenclatura: Pontos</option>
+              <option value="GOLS">Nomenclatura: Gols</option>
             </Select>
             <Button type="button" variant="secondary" onClick={() => window.print()}>
               <Download size={16} />
@@ -136,7 +142,7 @@ export function StatsPage() {
 
         <div className="grid gap-4 p-5 lg:grid-cols-3">
           <div className="rounded-2xl border border-border bg-slate-950 p-5 text-white">
-            <p className="text-sm text-white/65">Destaque em pontos</p>
+            <p className="text-sm text-white/65">Destaque em {primaryStat.labels.lowerPlural}</p>
             <p className="mt-2 text-2xl font-black">{topScorer?.name ?? '-'}</p>
             <p className="mt-5 text-4xl font-black text-yellow-300">{topScorer?.goals ?? 0}</p>
           </div>
@@ -148,12 +154,12 @@ export function StatsPage() {
           <div className="rounded-2xl border border-border bg-yellow-50 p-5 text-yellow-950">
             <p className="text-sm text-yellow-900/65">Eventos com estatisticas</p>
             <p className="mt-2 text-2xl font-black">{uniqueMatches}</p>
-            <p className="mt-5 text-sm font-semibold">{totalGoals} pontos e {totalAssists} assistencias lancados no periodo.</p>
+            <p className="mt-5 text-sm font-semibold">{totalGoals} {primaryStat.labels.lowerPlural} e {totalAssists} assistencias lancados no periodo.</p>
           </div>
         </div>
 
         <div className="grid gap-4 p-5 pt-0 xl:grid-cols-[1fr_420px]">
-          <ReportRanking title="Top pontos" label="Pts" rows={scorers.slice(0, 10).map((player) => ({ name: player.name, meta: player.position, value: `${player.goals}` }))} />
+          <ReportRanking title={`Top ${primaryStat.labels.lowerPlural}`} label={primaryStat.labels.short} rows={scorers.slice(0, 10).map((player) => ({ name: player.name, meta: player.position, value: `${player.goals}` }))} />
           <ReportRanking title="Maiores assistentes" label="Assist." rows={assistants.slice(0, 10).map((player) => ({ name: player.name, meta: player.position, value: `${player.assists} assist.` }))} />
         </div>
 
@@ -198,7 +204,7 @@ export function StatsPage() {
               <p className="text-2xl font-black">{uniqueMatches}</p>
             </div>
           </div>
-          <p className="mt-5 text-sm font-semibold text-muted-foreground">Dados aparecem apos o lancamento de pontos e assistencias dos eventos.</p>
+          <p className="mt-5 text-sm font-semibold text-muted-foreground">Dados aparecem apos o lancamento de {primaryStat.labels.lowerPlural} e assistencias dos eventos.</p>
         </Card>
       </section>
 
@@ -206,7 +212,7 @@ export function StatsPage() {
         <Card>
           <div className="mb-4 flex items-center gap-2">
             <Trophy className="text-primary" />
-            <h2 className="text-lg font-black">Top pontos</h2>
+            <h2 className="text-lg font-black">Top {primaryStat.labels.lowerPlural}</h2>
           </div>
           <div className="grid gap-2">
             {scorers.slice(0, 10).map((player, index) => (
@@ -230,7 +236,7 @@ export function StatsPage() {
       </section>
 
       <Card className="no-print">
-        <h2 className="text-lg font-black">Pontos e assistencias por participante</h2>
+        <h2 className="text-lg font-black">{primaryStat.labels.plural} e assistencias por participante</h2>
         <div className="mt-4 h-80">
           <ResponsiveContainer width="100%" height={280}>
             <BarChart data={chartData}>
@@ -238,8 +244,8 @@ export function StatsPage() {
               <XAxis dataKey="name" />
               <YAxis allowDecimals={false} />
               <Tooltip />
-              <Bar dataKey="pontos" fill="#166534" radius={[5, 5, 0, 0]} />
-              <Bar dataKey="assistencias" fill="#eab308" radius={[5, 5, 0, 0]} />
+              <Bar dataKey="indicador" name={primaryStat.labels.plural} fill="#166534" radius={[5, 5, 0, 0]} />
+              <Bar dataKey="assistencias" name="Assistencias" fill="#eab308" radius={[5, 5, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>

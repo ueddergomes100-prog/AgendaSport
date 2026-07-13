@@ -17,6 +17,7 @@ import {
   upsertAttendance,
 } from '../lib/data'
 import { displayPosition } from '../lib/positions'
+import { usePrimaryStatLabel } from '../lib/stats-labels'
 import type { Match } from '../lib/types'
 import { getErrorMessage } from '../lib/utils'
 
@@ -30,6 +31,7 @@ export function MatchStatsEntryPage() {
   const latestTeamDraw = useQuery({ queryKey: ['latest-team-draw', matchId], queryFn: () => getLatestTeamDraw(matchId), enabled: Boolean(matchId) })
   const [saving, setSaving] = useState(false)
   const [feedback, setFeedback] = useState('')
+  const { labels: primaryStatLabels } = usePrimaryStatLabel()
 
   const selectedMatch = useMemo(() => (matches.data ?? []).find((match) => match.id === matchId) ?? null, [matches.data, matchId])
   const selectedPickup = useMemo(() => (pickups.data ?? []).find((pickup) => pickup.id === selectedMatch?.pickup_id) ?? null, [pickups.data, selectedMatch])
@@ -176,14 +178,14 @@ export function MatchStatsEntryPage() {
       <section className="grid grid-cols-3 gap-2 sm:gap-4">
         <Card><Summary icon={<Users size={18} />} label="Participantes" value={rows.length} /></Card>
         <Card><Summary icon={<CheckCircle2 size={18} />} label="Presentes" value={totals.present} /></Card>
-        <Card><Summary icon={<ClipboardList size={18} />} label="Pontos" value={totals.points} /></Card>
+        <Card><Summary icon={<ClipboardList size={18} />} label={primaryStatLabels.plural} value={totals.points} /></Card>
       </section>
 
       <Card className="p-4 sm:p-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <CardTitle className="text-xl font-black">Lancamento dos participantes</CardTitle>
-            <p className="mt-1 text-sm text-muted-foreground">Informe presenca, pontos e assistencias. Serve para diferentes modalidades esportivas.</p>
+            <p className="mt-1 text-sm text-muted-foreground">Informe presenca, {primaryStatLabels.lowerPlural} e assistencias. Serve para diferentes modalidades esportivas.</p>
           </div>
           <span className="rounded-md bg-muted px-2 py-1 text-xs font-black">{canLaunchStats ? `${rows.length} elegiveis` : 'Liberado no dia do evento'}</span>
         </div>
@@ -211,7 +213,7 @@ export function MatchStatsEntryPage() {
                   </label>
                   <div className="grid min-w-0 grid-cols-2 gap-2 sm:gap-3">
                     <label className="grid min-w-0 gap-1 text-sm font-black text-slate-700 dark:text-slate-200">
-                      Pontos
+                      {primaryStatLabels.plural}
                       <Input className="h-12 text-base font-black" name={`goals-${item.player_id}`} type="number" inputMode="numeric" min={0} defaultValue={saved?.goals ?? 0} disabled={!canLaunchStats} />
                     </label>
                     <label className="grid min-w-0 gap-1 text-sm font-black text-slate-700 dark:text-slate-200">

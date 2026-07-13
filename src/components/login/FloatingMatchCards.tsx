@@ -6,7 +6,7 @@ const featureCards: Array<{ title: string; value: string; detail: string; icon: 
   { title: 'Confirmados', value: '18/20', detail: 'Presenca em tempo real', icon: UsersRound, tone: 'text-emerald-200' },
   { title: 'Equipes montadas', value: '4 equipes', detail: 'Sorteio equilibrado', icon: ShieldCheck, tone: 'text-cyan-200' },
   { title: 'Caixa do evento', value: 'R$ 420', detail: 'Mensalistas e avulsos', icon: Banknote, tone: 'text-yellow-200' },
-  { title: 'Ranking atualizado', value: 'Ao vivo', detail: 'Pontos e assistencias', icon: Medal, tone: 'text-amber-200' },
+  { title: 'Ranking atualizado', value: 'Ao vivo', detail: 'Gols/pontos e assistencias', icon: Medal, tone: 'text-amber-200' },
   { title: 'Portal do participante', value: 'Online', detail: 'Inscricao e agenda', icon: Activity, tone: 'text-green-200' },
 ]
 
