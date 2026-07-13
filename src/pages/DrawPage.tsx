@@ -6,6 +6,7 @@ import { Card, CardTitle } from '../components/ui/card'
 import { Field, Input, Select } from '../components/ui/field'
 import { AnimatedPage } from '../components/ui/sport'
 import { getAttendance, getMatches, saveTeamDraw } from '../lib/data'
+import { displayPosition, isGoalkeeperPosition } from '../lib/positions'
 import { buildBalancedTeams } from '../lib/team-draw'
 import type { TeamDraw, TeamDrawPlayer, TeamDrawTeam } from '../lib/types'
 import { getErrorMessage, percent } from '../lib/utils'
@@ -28,7 +29,7 @@ export function DrawPage() {
     () => (attendance.data ?? []).filter((item) => ['CONFIRMADO', 'COMPARECEU'].includes(item.status) && item.player).map((item) => ({ ...item.player!, attendance_id: item.id })),
     [attendance.data],
   )
-  const goalkeepers = confirmedPlayers.filter((player) => player.primary_position === 'Goleiro').length
+  const goalkeepers = confirmedPlayers.filter((player) => isGoalkeeperPosition(player.primary_position)).length
   const drawCapacity = teamCount * playersPerTeam
   const teamSlots = draw?.teams ?? buildEmptyTeams(teamCount, playersPerTeam)
 
@@ -242,8 +243,4 @@ function ReserveCard({ players }: { players: TeamDrawPlayer[] }) {
       </div>
     </Card>
   )
-}
-
-function displayPosition(position: TeamDrawPlayer['primary_position']) {
-  return position === 'Goleiro' ? 'Goleiro' : 'Linha'
 }

@@ -34,6 +34,7 @@ import {
   updateMatch,
   upsertAttendance,
 } from '../lib/data'
+import { displayPosition, isGoalkeeperPosition } from '../lib/positions'
 import type { Attendance, AttendanceStatus, Match, Pickup } from '../lib/types'
 import { cn, getErrorMessage } from '../lib/utils'
 
@@ -461,7 +462,7 @@ export function SchedulePage() {
                           <StatusPill status={item.status} />
                           {item.queue_position ? <span className="rounded-md bg-yellow-100 px-2 py-1 text-xs font-black text-yellow-900">Fila #{item.queue_position}</span> : null}
                         </div>
-                        <p className="mt-1 text-xs text-muted-foreground">{item.player?.primary_position ?? '-'} - {item.player?.whatsapp ?? 'Sem WhatsApp'}</p>
+                        <p className="mt-1 text-xs text-muted-foreground">{displayPosition(item.player?.primary_position)} - {item.player?.whatsapp ?? 'Sem WhatsApp'}</p>
                       </div>
                       <div className="grid gap-2">
                         <ResponseHint status={item.status} />
@@ -506,7 +507,7 @@ export function SchedulePage() {
                         <div key={item.id} className="grid min-w-0 gap-4 rounded-xl border border-border bg-white/75 p-3 shadow-sm dark:bg-slate-950/40 sm:p-4 lg:grid-cols-[minmax(0,1fr)_150px_minmax(260px,360px)] lg:items-center">
                           <div className="min-w-0">
                             <p className="truncate text-lg font-black">{item.player?.name ?? 'Participante'}</p>
-                            <p className="text-sm text-muted-foreground">{item.player?.primary_position ?? '-'}</p>
+                            <p className="text-sm text-muted-foreground">{displayPosition(item.player?.primary_position)}</p>
                           </div>
                           <label className="flex min-h-12 items-center justify-center gap-2 rounded-lg bg-muted px-3 py-2 text-sm font-black lg:justify-start">
                             <input
@@ -614,8 +615,8 @@ function countRoleAttendance(rows: Attendance[]) {
   return rows.reduce(
     (acc, row) => {
       const confirmed = ['CONFIRMADO', 'COMPARECEU'].includes(row.status)
-      if (confirmed && row.player?.primary_position === 'Goleiro') acc.goalkeeperConfirmed += 1
-      if (confirmed && row.player?.primary_position !== 'Goleiro') acc.lineConfirmed += 1
+      if (confirmed && isGoalkeeperPosition(row.player?.primary_position)) acc.goalkeeperConfirmed += 1
+      if (confirmed && !isGoalkeeperPosition(row.player?.primary_position)) acc.lineConfirmed += 1
       return acc
     },
     { lineConfirmed: 0, goalkeeperConfirmed: 0 },

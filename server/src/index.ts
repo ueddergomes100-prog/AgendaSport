@@ -150,6 +150,10 @@ function normalizeWhatsApp(value: string) {
   return local
 }
 
+function isPlayerPositionEnumError(error: { message?: string } | null) {
+  return Boolean(error?.message?.includes('player_position'))
+}
+
 app.post('/api/public-registration/:token/players', async (req, res) => {
   const paramsSchema = z.object({ token: z.string().uuid() })
   const bodySchema = z.object({
@@ -189,27 +193,40 @@ app.post('/api/public-registration/:token/players', async (req, res) => {
     const firstName = input.first_name.trim()
     const lastName = input.last_name.trim()
     const fullName = `${firstName} ${lastName}`
-    const position = input.position_kind === 'GOLEIRO' ? 'Goleiro' : 'Linha'
+    const position = input.position_kind === 'GOLEIRO' ? 'GOLEIRO' : 'LINHA'
+    const legacyPosition = input.position_kind === 'GOLEIRO' ? 'Goleiro' : 'Linha'
+    const basePlayerPayload = {
+      tenant_id: company.id,
+      first_name: firstName,
+      last_name: lastName,
+      name: fullName,
+      whatsapp: input.whatsapp.replace(/\D/g, ''),
+      whatsapp_normalized: normalized,
+      status: 'ATIVO',
+      type: 'AVULSO',
+      technical_score: 5,
+      primary_position: position,
+      notes: input.position_kind === 'GOLEIRO' ? 'Autoinscricao: goleiro' : 'Autoinscricao: jogador de linha',
+    }
 
-    const { data: player, error: insertError } = await adminSupabase
+    let { data: player, error: insertError } = await adminSupabase
       .from('players')
-      .insert({
-        tenant_id: company.id,
-        first_name: firstName,
-        last_name: lastName,
-        name: fullName,
-        whatsapp: input.whatsapp.replace(/\D/g, ''),
-        whatsapp_normalized: normalized,
-        status: 'ATIVO',
-        type: 'AVULSO',
-        technical_score: 5,
-        primary_position: position,
-        notes: position === 'Goleiro' ? 'Autoinscricao: goleiro' : 'Autoinscricao: jogador de linha',
-      })
+      .insert(basePlayerPayload)
       .select('id, name, whatsapp')
       .single()
 
+    if (isPlayerPositionEnumError(insertError)) {
+      const fallback = await adminSupabase
+        .from('players')
+        .insert({ ...basePlayerPayload, primary_position: legacyPosition })
+        .select('id, name, whatsapp')
+        .single()
+      player = fallback.data
+      insertError = fallback.error
+    }
+
     if (insertError) throw insertError
+    if (!player) throw new Error('Nao foi possivel criar o participante.')
 
     const message = [
       'Agenda Sport',

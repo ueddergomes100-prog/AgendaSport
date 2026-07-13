@@ -1,9 +1,10 @@
 import type { TeamDraw, TeamDrawPlayer, TeamDrawTeam } from './types'
+import { isGoalkeeperPosition } from './positions'
 
 const teamLetters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
 function playerWeight(player: TeamDrawPlayer) {
-  const goalkeeperBonus = player.primary_position === 'Goleiro' ? 2 : 0
+  const goalkeeperBonus = isGoalkeeperPosition(player.primary_position) ? 2 : 0
   return player.technical_score * 10 + goalkeeperBonus
 }
 
@@ -12,12 +13,12 @@ function score(players: TeamDrawPlayer[]) {
 }
 
 function countGoalkeepers(players: TeamDrawPlayer[]) {
-  return players.filter((player) => player.primary_position === 'Goleiro').length
+  return players.filter((player) => isGoalkeeperPosition(player.primary_position)).length
 }
 
 function teamPenalty(team: TeamDrawTeam, candidate: TeamDrawPlayer) {
-  const goalkeeperPenalty = candidate.primary_position === 'Goleiro' ? countGoalkeepers(team.players) * 16 : 0
-  const lineBalancePenalty = candidate.primary_position !== 'Goleiro' ? Math.max(0, team.players.length - countGoalkeepers(team.players)) * 0.25 : 0
+  const goalkeeperPenalty = isGoalkeeperPosition(candidate.primary_position) ? countGoalkeepers(team.players) * 16 : 0
+  const lineBalancePenalty = !isGoalkeeperPosition(candidate.primary_position) ? Math.max(0, team.players.length - countGoalkeepers(team.players)) * 0.25 : 0
   return score(team.players) * 1.4 + team.players.length * 2 + goalkeeperPenalty + lineBalancePenalty
 }
 

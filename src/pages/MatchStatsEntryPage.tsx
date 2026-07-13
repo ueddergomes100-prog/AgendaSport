@@ -16,6 +16,7 @@ import {
   savePostMatchStats,
   upsertAttendance,
 } from '../lib/data'
+import { displayPosition } from '../lib/positions'
 import type { Match } from '../lib/types'
 import { getErrorMessage } from '../lib/utils'
 
@@ -202,7 +203,7 @@ export function MatchStatsEntryPage() {
                 <div key={item.id} className="grid min-w-0 gap-4 rounded-xl border border-border bg-white/75 p-3 shadow-sm dark:bg-slate-950/40 sm:p-4 lg:grid-cols-[minmax(0,1fr)_150px_minmax(260px,360px)] lg:items-center">
                   <div className="min-w-0">
                     <p className="truncate text-lg font-black">{item.player?.name ?? 'Participante'}</p>
-                    <p className="text-sm text-muted-foreground">{item.player?.primary_position ?? '-'} - {item.player?.whatsapp ?? 'Sem WhatsApp'}</p>
+                    <p className="text-sm text-muted-foreground">{displayPosition(item.player?.primary_position)} - {item.player?.whatsapp ?? 'Sem WhatsApp'}</p>
                   </div>
                   <label className="flex min-h-12 items-center justify-center gap-2 rounded-lg bg-muted px-3 py-2 text-sm font-black lg:justify-start">
                     <input name={`present-${item.player_id}`} type="checkbox" defaultChecked={saved?.present ?? item.status !== 'FALTOU'} disabled={!canLaunchStats} className="size-5 accent-green-700" />

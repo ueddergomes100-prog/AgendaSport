@@ -6,10 +6,11 @@ import { Field, Input, Select, Textarea } from '../components/ui/field'
 import { Button } from '../components/ui/button'
 import { AnimatedPage, PremiumModal } from '../components/ui/sport'
 import { createPlayer, deletePlayer, getCurrentCompany, getPlayers, updatePlayer } from '../lib/data'
+import { displayPosition, isGoalkeeperPosition, positionOptions } from '../lib/positions'
 import type { Company, Player, Position } from '../lib/types'
 import { cn, getErrorMessage } from '../lib/utils'
 
-const positions: Position[] = ['Goleiro', 'Linha']
+const positions: Position[] = positionOptions
 
 export function PlayersPage() {
   const players = useQuery({ queryKey: ['players'], queryFn: getPlayers })
@@ -35,7 +36,7 @@ export function PlayersPage() {
   const activeCount = roster.filter((player) => player.status === 'ATIVO').length
   const suspendedCount = roster.filter((player) => player.status === 'SUSPENSO').length
   const mensalistas = roster.filter((player) => player.type === 'MENSALISTA').length
-  const goalkeepers = roster.filter((player) => player.primary_position === 'Goleiro').length
+  const goalkeepers = roster.filter((player) => isGoalkeeperPosition(player.primary_position)).length
   const linePlayers = roster.length - goalkeepers
   const topPlayer = [...roster].sort((a, b) => b.technical_score - a.technical_score)[0]
 
@@ -320,7 +321,7 @@ export function PlayersPage() {
               <Field label="WhatsApp"><Input name="whatsapp" required defaultValue={editingPlayer?.whatsapp ?? ''} /></Field>
               <Field label="Nota"><Input name="technical_score" type="number" min={1} max={10} defaultValue={editingPlayer?.technical_score ?? 5} /></Field>
               <Field label="Posicao">
-                <Select name="primary_position" defaultValue={editingPlayer?.primary_position === 'Goleiro' ? 'Goleiro' : 'Linha'}>
+                <Select name="primary_position" defaultValue={isGoalkeeperPosition(editingPlayer?.primary_position) ? 'GOLEIRO' : 'LINHA'}>
                   {positions.map((item) => <option key={item} value={item}>{displayPosition(item)}</option>)}
                 </Select>
               </Field>
@@ -423,10 +424,6 @@ function RegistrationInviteCard({
       )}
     </Card>
   )
-}
-
-function displayPosition(position: Position) {
-  return position === 'Goleiro' ? 'Goleiro' : 'Linha'
 }
 
 function getNameParts(player: Player | null) {

@@ -7,6 +7,7 @@ import { Card } from '../components/ui/card'
 import { Select } from '../components/ui/field'
 import { AnimatedPage } from '../components/ui/sport'
 import { getCurrentCompany, getPlayerStats } from '../lib/data'
+import { displayPosition } from '../lib/positions'
 import type { PlayerStatRow } from '../lib/types'
 
 type Period = 'day' | 'month' | 'year' | 'all'
@@ -34,7 +35,7 @@ function aggregate(rows: PlayerStatRow[]) {
     const current = map.get(row.player_id) ?? {
       playerId: row.player_id,
       name,
-      position: row.player?.primary_position ?? '-',
+      position: displayPosition(row.player?.primary_position),
       goals: 0,
       assists: 0,
       games: 0,

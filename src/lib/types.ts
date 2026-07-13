@@ -3,7 +3,7 @@ export type PlanCode = 'Starter' | 'Pro' | 'Elite'
 export type CompanyStatus = 'ATIVA' | 'BLOQUEADA' | 'TRIAL' | 'CANCELADA'
 export type PlayerStatus = 'ATIVO' | 'INATIVO' | 'SUSPENSO'
 export type PlayerType = 'MENSALISTA' | 'AVULSO'
-export type Position = 'Goleiro' | 'Linha'
+export type Position = 'GOLEIRO' | 'LINHA' | 'Goleiro' | 'Linha'
 export type AttendanceStatus = 'CONVIDADO' | 'CONFIRMADO' | 'RECUSOU' | 'ESPERA' | 'COMPARECEU' | 'FALTOU'
 
 export type Profile = {

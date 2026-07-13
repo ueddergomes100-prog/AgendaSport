@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import { toLegacyDbPosition, toUpperDbPosition } from './positions'
 import type { Attendance, Company, DashboardStats, Match, MatchTeamResult, Pickup, Player, PlayerStatRow, Profile, TeamDrawRecord } from './types'
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
@@ -191,6 +192,11 @@ export async function createPlayer(input: Partial<Player>) {
   const tenantId = profile.tenant_id!
   const payload = await preparePlayerPayload(input, tenantId)
   const { error } = await supabase.from('players').insert({ ...payload, tenant_id: tenantId })
+  if (isPlayerPositionEnumError(error)) {
+    const { error: legacyError } = await supabase.from('players').insert({ ...payload, tenant_id: tenantId, primary_position: toLegacyDbPosition(payload.primary_position) })
+    if (legacyError) throw legacyError
+    return
+  }
   if (error) throw error
 }
 
@@ -199,6 +205,11 @@ export async function updatePlayer(id: string, input: Partial<Player>) {
   const tenantId = profile.tenant_id!
   const payload = await preparePlayerPayload(input, tenantId, id)
   const { error } = await supabase.from('players').update(payload).eq('id', id)
+  if (isPlayerPositionEnumError(error)) {
+    const { error: legacyError } = await supabase.from('players').update({ ...payload, primary_position: toLegacyDbPosition(payload.primary_position) }).eq('id', id)
+    if (legacyError) throw legacyError
+    return
+  }
   if (error) throw error
 }
 
@@ -221,12 +232,16 @@ async function preparePlayerPayload(input: Partial<Player>, tenantId: string, cu
     name: `${firstName} ${lastName}`.trim(),
     whatsapp,
     whatsapp_normalized: normalized,
-    primary_position: input.primary_position === 'Goleiro' ? 'Goleiro' : 'Linha',
+    primary_position: toUpperDbPosition(input.primary_position),
     status,
     suspended_at: status === 'SUSPENSO' ? (input.suspended_at ?? new Date().toISOString()) : null,
     suspension_reason: status === 'SUSPENSO' ? (input.suspension_reason ?? input.notes ?? null) : null,
     suspended_until: status === 'SUSPENSO' ? (input.suspended_until ?? null) : null,
   }
+}
+
+function isPlayerPositionEnumError(error: { message?: string } | null) {
+  return Boolean(error?.message?.includes('player_position'))
 }
 
 async function assertUniquePlayerPhone(tenantId: string, normalized: string, currentPlayerId?: string) {
