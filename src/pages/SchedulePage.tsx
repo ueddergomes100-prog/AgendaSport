@@ -18,6 +18,7 @@ import {
 import { Button } from '../components/ui/button'
 import { Card, CardTitle } from '../components/ui/card'
 import { Field, Input, Select, Textarea } from '../components/ui/field'
+import { NumberStepper } from '../components/ui/number-stepper'
 import { AnimatedPage, ConfirmDialog } from '../components/ui/sport'
 import {
   createMatch,
@@ -506,30 +507,26 @@ export function SchedulePage() {
                     {presentCandidates.map((item) => {
                       const saved = statsByPlayerId.get(item.player_id)
                       return (
-                        <div key={item.id} className="grid min-w-0 gap-4 rounded-xl border border-border bg-white/75 p-3 shadow-sm dark:bg-slate-950/40 sm:p-4 lg:grid-cols-[minmax(0,1fr)_150px_minmax(260px,360px)] lg:items-center">
-                          <div className="min-w-0">
-                            <p className="truncate text-lg font-black">{item.player?.name ?? 'Participante'}</p>
-                            <p className="text-sm text-muted-foreground">{displayPosition(item.player?.primary_position)}</p>
+                        <div key={item.id} className="grid min-w-0 gap-3 rounded-xl border border-border bg-white/80 p-3 shadow-sm dark:bg-slate-950/40 sm:p-4">
+                          <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_160px] sm:items-center">
+                            <div className="min-w-0">
+                              <p className="truncate text-lg font-black">{item.player?.name ?? 'Participante'}</p>
+                              <p className="text-sm text-muted-foreground">{displayPosition(item.player?.primary_position)}</p>
+                            </div>
+                            <label className="flex min-h-12 items-center justify-center gap-2 rounded-lg bg-muted px-3 py-2 text-sm font-black sm:justify-start">
+                              <input
+                                name={`present-${item.player_id}`}
+                                type="checkbox"
+                                defaultChecked={saved?.present ?? item.status !== 'FALTOU'}
+                                disabled={!canLaunchStats}
+                                className="size-5 accent-green-700"
+                              />
+                              Presente
+                            </label>
                           </div>
-                          <label className="flex min-h-12 items-center justify-center gap-2 rounded-lg bg-muted px-3 py-2 text-sm font-black lg:justify-start">
-                            <input
-                              name={`present-${item.player_id}`}
-                              type="checkbox"
-                              defaultChecked={saved?.present ?? item.status !== 'FALTOU'}
-                              disabled={!canLaunchStats}
-                              className="size-5 accent-green-700"
-                            />
-                            Presente
-                          </label>
                           <div className="grid min-w-0 grid-cols-2 gap-2 sm:gap-3">
-                            <label className="grid min-w-0 gap-1 text-sm font-black text-slate-700 dark:text-slate-200">
-                              {primaryStatLabels.plural}
-                              <Input className="h-12 text-base font-black" name={`goals-${item.player_id}`} type="number" inputMode="numeric" min={0} defaultValue={saved?.goals ?? 0} disabled={!canLaunchStats} />
-                            </label>
-                            <label className="grid min-w-0 gap-1 text-sm font-black text-slate-700 dark:text-slate-200">
-                              Assistencias
-                              <Input className="h-12 text-base font-black" name={`assists-${item.player_id}`} type="number" inputMode="numeric" min={0} defaultValue={saved?.assists ?? 0} disabled={!canLaunchStats} />
-                            </label>
+                            <NumberStepper name={`goals-${item.player_id}`} label={primaryStatLabels.plural} defaultValue={saved?.goals ?? 0} disabled={!canLaunchStats} />
+                            <NumberStepper name={`assists-${item.player_id}`} label="Assistencias" defaultValue={saved?.assists ?? 0} disabled={!canLaunchStats} />
                           </div>
                         </div>
                       )
