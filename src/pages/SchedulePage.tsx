@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from 'react'
+import { useMemo, useRef, useState, type FormEvent } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   CalendarPlus,
@@ -66,9 +66,13 @@ export function SchedulePage() {
   const [savingMatch, setSavingMatch] = useState(false)
   const [savingInvite, setSavingInvite] = useState(false)
   const [savingStats, setSavingStats] = useState(false)
+  const [savingPartialId, setSavingPartialId] = useState('')
   const [deletingMatch, setDeletingMatch] = useState(false)
   const [matchToDelete, setMatchToDelete] = useState<Match | null>(null)
+  const [confirmFinish, setConfirmFinish] = useState(false)
   const [feedback, setFeedback] = useState('')
+  const [toast, setToast] = useState('')
+  const statsFormRef = useRef<HTMLFormElement>(null)
   const { labels: primaryStatLabels } = usePrimaryStatLabel()
   const effectiveSelectedMatchId = selectedMatchId || matches.data?.[0]?.id || ''
 
@@ -118,6 +122,11 @@ export function SchedulePage() {
   const counts = countAttendance(attendanceRows)
   const roleCounts = countRoleAttendance(attendanceRows)
   const canLaunchStats = selectedMatch ? isSameLocalDate(new Date(selectedMatch.scheduled_at), new Date()) : false
+
+  function notify(message: string) {
+    setToast(message)
+    window.setTimeout(() => setToast((current) => (current === message ? '' : current)), 2200)
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -231,14 +240,63 @@ export function SchedulePage() {
     }
   }
 
-  async function closeMatch(event: FormEvent<HTMLFormElement>) {
+  function buildStatsRowFromForm(item: Attendance, override: Partial<{ present: boolean; goals: number; assists: number }> = {}) {
+    const form = statsFormRef.current
+    return {
+      playerId: item.player_id,
+      present: override.present ?? form?.querySelector<HTMLInputElement>(`[name="present-${item.player_id}"]`)?.checked ?? item.status !== 'FALTOU',
+      goals: override.goals ?? Number(form?.querySelector<HTMLInputElement>(`[name="goals-${item.player_id}"]`)?.value || 0),
+      assists: override.assists ?? Number(form?.querySelector<HTMLInputElement>(`[name="assists-${item.player_id}"]`)?.value || 0),
+      wins: 0,
+      draws: 0,
+      losses: 0,
+    }
+  }
+
+  async function savePartialStatsRow(item: Attendance, override: Partial<{ present: boolean; goals: number; assists: number }> = {}) {
+    if (!selectedMatch || !canLaunchStats) return
+    const row = buildStatsRowFromForm(item, override)
+    setSavingPartialId(item.player_id)
+    setFeedback('')
+    try {
+      await upsertAttendance(selectedMatch.id, row.playerId, row.present ? 'COMPARECEU' : 'FALTOU')
+      await savePostMatchStats(
+        selectedMatch.id,
+        {
+          team_a_score: selectedMatch.team_a_score,
+          team_b_score: selectedMatch.team_b_score,
+          team_results: selectedMatch.team_results ?? latestTeamDraw.data?.payload?.teams?.map((team) => ({
+            id: team.id,
+            name: team.name,
+            score: 0,
+            playerIds: team.players.map((player) => player.id),
+          })) ?? [],
+          status: selectedMatch.status,
+        },
+        [row],
+      )
+      await Promise.all([attendance.refetch(), matchStats.refetch()])
+      notify('Atualizado com sucesso.')
+    } catch (error) {
+      setFeedback(getErrorMessage(error, 'Nao foi possivel atualizar este participante.'))
+    } finally {
+      setSavingPartialId('')
+    }
+  }
+
+  function closeMatch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!selectedMatch) return
     if (!canLaunchStats) {
       setFeedback('O lancamento de presenca real e estatisticas so fica liberado no dia do evento.')
       return
     }
-    const form = new FormData(event.currentTarget)
+    setConfirmFinish(true)
+  }
+
+  async function finishMatch() {
+    if (!selectedMatch || !statsFormRef.current) return
+    const form = new FormData(statsFormRef.current)
     const rows = presentCandidates.map((item) => {
       const present = form.get(`present-${item.player_id}`) === 'on'
 
@@ -303,6 +361,7 @@ export function SchedulePage() {
       setFeedback(getErrorMessage(error, 'Nao foi possivel salvar as estatisticas.'))
     } finally {
       setSavingStats(false)
+      setConfirmFinish(false)
     }
   }
 
@@ -505,7 +564,7 @@ export function SchedulePage() {
                   </p>
                 )}
 
-                <form key={`${effectiveSelectedMatchId}-${matchStats.dataUpdatedAt}`} className="mt-4 grid gap-4" onSubmit={closeMatch}>
+                <form ref={statsFormRef} key={`${effectiveSelectedMatchId}-${matchStats.dataUpdatedAt}`} className="mt-4 grid gap-4" onSubmit={closeMatch}>
                   <div className="grid gap-3">
                     {presentCandidates.map((item) => {
                       const saved = statsByPlayerId.get(item.player_id)
@@ -519,17 +578,18 @@ export function SchedulePage() {
                             <label className="flex min-h-12 items-center justify-center gap-2 rounded-lg bg-muted px-3 py-2 text-sm font-black sm:justify-start">
                               <input
                                 name={`present-${item.player_id}`}
-                                type="checkbox"
-                                defaultChecked={saved?.present ?? item.status !== 'FALTOU'}
-                                disabled={!canLaunchStats}
-                                className="size-5 accent-green-700"
-                              />
-                              Presente
-                            </label>
-                          </div>
-                          <div className="grid min-w-0 grid-cols-2 gap-2 sm:gap-3">
-                            <NumberStepper name={`goals-${item.player_id}`} label={primaryStatLabels.plural} defaultValue={saved?.goals ?? 0} disabled={!canLaunchStats} />
-                            <NumberStepper name={`assists-${item.player_id}`} label="Assistencias" defaultValue={saved?.assists ?? 0} disabled={!canLaunchStats} />
+                              type="checkbox"
+                              defaultChecked={saved?.present ?? item.status !== 'FALTOU'}
+                              disabled={!canLaunchStats || savingPartialId === item.player_id}
+                              className="size-5 accent-green-700"
+                              onChange={(event) => savePartialStatsRow(item, { present: event.currentTarget.checked })}
+                            />
+                            Presente
+                          </label>
+                        </div>
+                        <div className="grid min-w-0 grid-cols-2 gap-2 sm:gap-3">
+                            <NumberStepper name={`goals-${item.player_id}`} label={primaryStatLabels.plural} defaultValue={saved?.goals ?? 0} disabled={!canLaunchStats || savingPartialId === item.player_id} onValueChange={(value) => savePartialStatsRow(item, { goals: value })} />
+                            <NumberStepper name={`assists-${item.player_id}`} label="Assistencias" defaultValue={saved?.assists ?? 0} disabled={!canLaunchStats || savingPartialId === item.player_id} onValueChange={(value) => savePartialStatsRow(item, { assists: value })} />
                           </div>
                         </div>
                       )
@@ -543,7 +603,7 @@ export function SchedulePage() {
 
                   <Button className="min-h-12 w-full" disabled={savingStats || !presentCandidates.length || !canLaunchStats}>
                     {savingStats ? <LoaderCircle className="animate-spin" size={16} /> : <Save size={16} />}
-                    {savingStats ? 'Salvando...' : 'Salvar estatisticas individuais'}
+                    {savingStats ? 'Finalizando...' : 'Finalizar evento e calcular estatisticas'}
                   </Button>
                 </form>
               </Card>
@@ -570,6 +630,36 @@ export function SchedulePage() {
             <Button type="button" variant="danger" onClick={() => removeMatch(matchToDelete)} disabled={deletingMatch}>
               {deletingMatch ? <LoaderCircle className="animate-spin" size={16} /> : <Trash2 size={16} />}
               {deletingMatch ? 'Excluindo...' : 'Excluir agendamento'}
+            </Button>
+          </div>
+        </ConfirmDialog>
+      )}
+
+      {toast && (
+        <div className="fixed bottom-5 left-1/2 z-[120] w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-center text-sm font-black text-green-900 shadow-2xl shadow-green-950/20 dark:border-green-900/60 dark:bg-green-950 dark:text-green-100">
+          <CheckCircle2 className="mr-2 inline" size={16} />
+          {toast}
+        </div>
+      )}
+
+      {confirmFinish && (
+        <ConfirmDialog
+          title="Finalizar evento?"
+          description="Ao confirmar, o sistema vai salvar a presenca real, calcular as estatisticas individuais e marcar este evento como finalizado."
+          onClose={() => setConfirmFinish(false)}
+        >
+          <div className="rounded-xl border border-border bg-muted/50 p-4">
+            <p className="text-xs font-black uppercase tracking-wide text-muted-foreground">Evento</p>
+            <p className="mt-2 font-black">{selectedMatchTitle}</p>
+            {selectedMatch && <p className="mt-1 text-sm text-muted-foreground">{formatDate(selectedMatch.scheduled_at)} as {formatTime(selectedMatch.scheduled_at)}</p>}
+          </div>
+          <div className="mt-4 flex flex-wrap justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={() => setConfirmFinish(false)} disabled={savingStats}>
+              Continuar lancando
+            </Button>
+            <Button type="button" onClick={finishMatch} disabled={savingStats}>
+              {savingStats ? <LoaderCircle className="animate-spin" size={16} /> : <Save size={16} />}
+              {savingStats ? 'Finalizando...' : 'Confirmar finalizacao'}
             </Button>
           </div>
         </ConfirmDialog>

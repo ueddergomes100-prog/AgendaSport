@@ -9,13 +9,18 @@ type NumberStepperProps = {
   min?: number
   disabled?: boolean
   className?: string
+  onValueChange?: (value: number) => void
 }
 
-export function NumberStepper({ name, label, defaultValue = 0, min = 0, disabled, className }: NumberStepperProps) {
+export function NumberStepper({ name, label, defaultValue = 0, min = 0, disabled, className, onValueChange }: NumberStepperProps) {
   const [value, setValue] = useState(() => Math.max(min, Number(defaultValue ?? 0) || 0))
 
   function change(delta: number) {
-    setValue((current) => Math.max(min, current + delta))
+    setValue((current) => {
+      const next = Math.max(min, current + delta)
+      if (next !== current) onValueChange?.(next)
+      return next
+    })
   }
 
   return (

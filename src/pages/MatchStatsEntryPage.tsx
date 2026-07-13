@@ -1,11 +1,11 @@
-import { useMemo, useState, type FormEvent } from 'react'
+import { useMemo, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, CheckCircle2, ClipboardList, LoaderCircle, Save, Users } from 'lucide-react'
 import { Button } from '../components/ui/button'
 import { Card, CardTitle } from '../components/ui/card'
 import { NumberStepper } from '../components/ui/number-stepper'
-import { AnimatedPage } from '../components/ui/sport'
+import { AnimatedPage, ConfirmDialog } from '../components/ui/sport'
 import {
   createMatch,
   getAttendance,
@@ -18,7 +18,7 @@ import {
 } from '../lib/data'
 import { displayPosition } from '../lib/positions'
 import { usePrimaryStatLabel } from '../lib/stats-labels'
-import type { Match } from '../lib/types'
+import type { Attendance, Match } from '../lib/types'
 import { compareTextPtBr, getErrorMessage } from '../lib/utils'
 
 export function MatchStatsEntryPage() {
@@ -30,7 +30,11 @@ export function MatchStatsEntryPage() {
   const matchStats = useQuery({ queryKey: ['match-player-stats', matchId], queryFn: () => getMatchPlayerStats(matchId), enabled: Boolean(matchId) })
   const latestTeamDraw = useQuery({ queryKey: ['latest-team-draw', matchId], queryFn: () => getLatestTeamDraw(matchId), enabled: Boolean(matchId) })
   const [saving, setSaving] = useState(false)
+  const [savingPartialId, setSavingPartialId] = useState('')
   const [feedback, setFeedback] = useState('')
+  const [toast, setToast] = useState('')
+  const [confirmFinish, setConfirmFinish] = useState(false)
+  const formRef = useRef<HTMLFormElement>(null)
   const { labels: primaryStatLabels } = usePrimaryStatLabel()
 
   const selectedMatch = useMemo(() => (matches.data ?? []).find((match) => match.id === matchId) ?? null, [matches.data, matchId])
@@ -54,15 +58,69 @@ export function MatchStatsEntryPage() {
     { present: 0, points: 0, assists: 0 },
   )
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
+  function notify(message: string) {
+    setToast(message)
+    window.setTimeout(() => setToast((current) => (current === message ? '' : current)), 2200)
+  }
+
+  function buildRowFromForm(item: Attendance, override: Partial<{ present: boolean; goals: number; assists: number }> = {}) {
+    const form = formRef.current
+    return {
+      playerId: item.player_id,
+      present: override.present ?? form?.querySelector<HTMLInputElement>(`[name="present-${item.player_id}"]`)?.checked ?? item.status !== 'FALTOU',
+      goals: override.goals ?? Number(form?.querySelector<HTMLInputElement>(`[name="goals-${item.player_id}"]`)?.value || 0),
+      assists: override.assists ?? Number(form?.querySelector<HTMLInputElement>(`[name="assists-${item.player_id}"]`)?.value || 0),
+      wins: 0,
+      draws: 0,
+      losses: 0,
+    }
+  }
+
+  async function savePartialRow(item: Attendance, override: Partial<{ present: boolean; goals: number; assists: number }> = {}) {
+    if (!selectedMatch || !canLaunchStats) return
+    const row = buildRowFromForm(item, override)
+    setSavingPartialId(item.player_id)
+    setFeedback('')
+    try {
+      await upsertAttendance(selectedMatch.id, row.playerId, row.present ? 'COMPARECEU' : 'FALTOU')
+      await savePostMatchStats(
+        selectedMatch.id,
+        {
+          team_a_score: selectedMatch.team_a_score,
+          team_b_score: selectedMatch.team_b_score,
+          team_results: selectedMatch.team_results ?? latestTeamDraw.data?.payload?.teams?.map((team) => ({
+            id: team.id,
+            name: team.name,
+            score: 0,
+            playerIds: team.players.map((player) => player.id),
+          })) ?? [],
+          status: selectedMatch.status,
+        },
+        [row],
+      )
+      await Promise.all([attendance.refetch(), matchStats.refetch()])
+      notify('Atualizado com sucesso.')
+    } catch (error) {
+      setFeedback(getErrorMessage(error, 'Nao foi possivel atualizar este participante.'))
+    } finally {
+      setSavingPartialId('')
+    }
+  }
+
+  function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!selectedMatch) return
     if (!canLaunchStats) {
       setFeedback('O lancamento de presenca real e estatisticas so fica liberado no dia do evento.')
       return
     }
+    setConfirmFinish(true)
+  }
 
-    const form = new FormData(event.currentTarget)
+  async function finishMatch() {
+    if (!selectedMatch || !formRef.current) return
+
+    const form = new FormData(formRef.current)
     const statRows = rows.map((item) => ({
       playerId: item.player_id,
       present: form.get(`present-${item.player_id}`) === 'on',
@@ -125,6 +183,7 @@ export function MatchStatsEntryPage() {
       setFeedback(getErrorMessage(error, 'Nao foi possivel salvar as estatisticas.'))
     } finally {
       setSaving(false)
+      setConfirmFinish(false)
     }
   }
 
@@ -199,7 +258,7 @@ export function MatchStatsEntryPage() {
           </p>
         )}
 
-        <form key={`${matchId}-${matchStats.dataUpdatedAt}`} className="mt-4 grid gap-4" onSubmit={submit}>
+        <form ref={formRef} key={`${matchId}-${matchStats.dataUpdatedAt}`} className="mt-4 grid gap-4" onSubmit={submit}>
           <div className="grid gap-3">
             {rows.map((item) => {
               const saved = statsByPlayerId.get(item.player_id)
@@ -211,13 +270,20 @@ export function MatchStatsEntryPage() {
                       <p className="text-sm text-muted-foreground">{displayPosition(item.player?.primary_position)} - {item.player?.whatsapp ?? 'Sem WhatsApp'}</p>
                     </div>
                     <label className="flex min-h-12 items-center justify-center gap-2 rounded-lg bg-muted px-3 py-2 text-sm font-black sm:justify-start">
-                      <input name={`present-${item.player_id}`} type="checkbox" defaultChecked={saved?.present ?? item.status !== 'FALTOU'} disabled={!canLaunchStats} className="size-5 accent-green-700" />
+                      <input
+                        name={`present-${item.player_id}`}
+                        type="checkbox"
+                        defaultChecked={saved?.present ?? item.status !== 'FALTOU'}
+                        disabled={!canLaunchStats || savingPartialId === item.player_id}
+                        className="size-5 accent-green-700"
+                        onChange={(event) => savePartialRow(item, { present: event.currentTarget.checked })}
+                      />
                       Presente
                     </label>
                   </div>
                   <div className="grid min-w-0 grid-cols-2 gap-2 sm:gap-3">
-                    <NumberStepper name={`goals-${item.player_id}`} label={primaryStatLabels.plural} defaultValue={saved?.goals ?? 0} disabled={!canLaunchStats} />
-                    <NumberStepper name={`assists-${item.player_id}`} label="Assistencias" defaultValue={saved?.assists ?? 0} disabled={!canLaunchStats} />
+                    <NumberStepper name={`goals-${item.player_id}`} label={primaryStatLabels.plural} defaultValue={saved?.goals ?? 0} disabled={!canLaunchStats || savingPartialId === item.player_id} onValueChange={(value) => savePartialRow(item, { goals: value })} />
+                    <NumberStepper name={`assists-${item.player_id}`} label="Assistencias" defaultValue={saved?.assists ?? 0} disabled={!canLaunchStats || savingPartialId === item.player_id} onValueChange={(value) => savePartialRow(item, { assists: value })} />
                   </div>
                 </div>
               )
@@ -230,10 +296,31 @@ export function MatchStatsEntryPage() {
           </div>
           <Button className="min-h-12 w-full" disabled={saving || !rows.length || !canLaunchStats}>
             {saving ? <LoaderCircle className="animate-spin" size={16} /> : <Save size={16} />}
-            {saving ? 'Salvando...' : 'Salvar estatisticas'}
+            {saving ? 'Finalizando...' : 'Finalizar evento e calcular estatisticas'}
           </Button>
         </form>
       </Card>
+      {toast && (
+        <div className="fixed bottom-5 left-1/2 z-[120] w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-center text-sm font-black text-green-900 shadow-2xl shadow-green-950/20 dark:border-green-900/60 dark:bg-green-950 dark:text-green-100">
+          <CheckCircle2 className="mr-2 inline" size={16} />
+          {toast}
+        </div>
+      )}
+      {confirmFinish && (
+        <ConfirmDialog
+          title="Finalizar evento?"
+          description="Ao confirmar, o sistema vai salvar a presenca real, calcular as estatisticas individuais e marcar este evento como finalizado."
+          onClose={() => setConfirmFinish(false)}
+        >
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={() => setConfirmFinish(false)} disabled={saving}>Continuar lancando</Button>
+            <Button type="button" onClick={finishMatch} disabled={saving}>
+              {saving ? <LoaderCircle className="animate-spin" size={16} /> : <Save size={16} />}
+              {saving ? 'Finalizando...' : 'Confirmar finalizacao'}
+            </Button>
+          </div>
+        </ConfirmDialog>
+      )}
     </AnimatedPage>
   )
 }
