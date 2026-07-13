@@ -14,10 +14,6 @@ export function displayPosition(position?: string | null) {
   return isGoalkeeperPosition(position) ? 'Goleiro' : 'Linha'
 }
 
-export function toLegacyDbPosition(position?: string | null) {
-  return isGoalkeeperPosition(position) ? 'Goleiro' : 'Linha'
-}
-
 export function toUpperDbPosition(position?: string | null) {
   return isGoalkeeperPosition(position) ? 'GOLEIRO' : 'LINHA'
 }

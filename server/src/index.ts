@@ -150,10 +150,6 @@ function normalizeWhatsApp(value: string) {
   return local
 }
 
-function isPlayerPositionEnumError(error: { message?: string } | null) {
-  return Boolean(error?.message?.includes('player_position'))
-}
-
 app.post('/api/public-registration/:token/players', async (req, res) => {
   const paramsSchema = z.object({ token: z.string().uuid() })
   const bodySchema = z.object({
@@ -194,7 +190,6 @@ app.post('/api/public-registration/:token/players', async (req, res) => {
     const lastName = input.last_name.trim()
     const fullName = `${firstName} ${lastName}`
     const position = input.position_kind === 'GOLEIRO' ? 'GOLEIRO' : 'LINHA'
-    const legacyPosition = input.position_kind === 'GOLEIRO' ? 'Goleiro' : 'Linha'
     const basePlayerPayload = {
       tenant_id: company.id,
       first_name: firstName,
@@ -209,21 +204,11 @@ app.post('/api/public-registration/:token/players', async (req, res) => {
       notes: input.position_kind === 'GOLEIRO' ? 'Autoinscricao: goleiro' : 'Autoinscricao: jogador de linha',
     }
 
-    let { data: player, error: insertError } = await adminSupabase
+    const { data: player, error: insertError } = await adminSupabase
       .from('players')
       .insert(basePlayerPayload)
       .select('id, name, whatsapp')
       .single()
-
-    if (isPlayerPositionEnumError(insertError)) {
-      const fallback = await adminSupabase
-        .from('players')
-        .insert({ ...basePlayerPayload, primary_position: legacyPosition })
-        .select('id, name, whatsapp')
-        .single()
-      player = fallback.data
-      insertError = fallback.error
-    }
 
     if (insertError) throw insertError
     if (!player) throw new Error('Nao foi possivel criar o participante.')
