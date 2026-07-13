@@ -153,17 +153,17 @@ export function MatchStatsEntryPage() {
   }
 
   return (
-    <AnimatedPage>
-      <section className="football-surface overflow-hidden rounded-2xl p-6 text-white shadow-xl shadow-green-950/15">
+    <AnimatedPage className="gap-4 sm:gap-6">
+      <section className="football-surface overflow-hidden rounded-2xl p-4 text-white shadow-xl shadow-green-950/15 sm:p-6">
         <div className="stadium-lights" />
-        <div className="relative z-10 grid gap-5 lg:grid-cols-[1fr_auto] lg:items-end">
-          <div>
+        <div className="relative z-10 grid gap-4 sm:gap-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+          <div className="min-w-0">
             <span className="rounded-md bg-white/15 px-2 py-1 text-xs font-black uppercase tracking-wide">Sumula digital</span>
-            <h1 className="mt-4 text-3xl font-black">{selectedPickup?.name || selectedMatch.notes || 'Evento avulso'}</h1>
+            <h1 className="mt-4 break-words text-2xl font-black leading-tight sm:text-3xl">{selectedPickup?.name || selectedMatch.notes || 'Evento avulso'}</h1>
             <p className="mt-2 text-sm text-white/75">{formatDateTime(selectedMatch.scheduled_at)}</p>
             <p className="mt-1 text-sm text-white/75">{selectedPickup ? `${selectedPickup.place} - linha ${selectedMatch.max_line_players ?? selectedPickup.max_line_players ?? selectedPickup.max_players}, goleiros ${selectedMatch.max_goalkeepers ?? selectedPickup.max_goalkeepers ?? 0}` : 'Lancamento individual'}</p>
           </div>
-          <Button asChild variant="secondary" className="bg-white/90 text-slate-950 hover:bg-white">
+          <Button asChild variant="secondary" className="w-full bg-white/90 text-slate-950 hover:bg-white sm:w-auto">
             <Link to="/agenda">
               <ArrowLeft size={16} />
               Agenda
@@ -172,13 +172,13 @@ export function MatchStatsEntryPage() {
         </div>
       </section>
 
-      <section className="grid gap-4 md:grid-cols-3">
+      <section className="grid grid-cols-3 gap-2 sm:gap-4">
         <Card><Summary icon={<Users size={18} />} label="Participantes" value={rows.length} /></Card>
         <Card><Summary icon={<CheckCircle2 size={18} />} label="Presentes" value={totals.present} /></Card>
         <Card><Summary icon={<ClipboardList size={18} />} label="Pontos" value={totals.points} /></Card>
       </section>
 
-      <Card>
+      <Card className="p-4 sm:p-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <CardTitle className="text-xl font-black">Lancamento dos participantes</CardTitle>
@@ -199,23 +199,25 @@ export function MatchStatsEntryPage() {
             {rows.map((item) => {
               const saved = statsByPlayerId.get(item.player_id)
               return (
-                <div key={item.id} className="grid gap-3 rounded-xl border border-border bg-white/75 p-4 dark:bg-slate-950/40 lg:grid-cols-[1fr_130px_150px_150px] lg:items-center">
+                <div key={item.id} className="grid min-w-0 gap-4 rounded-xl border border-border bg-white/75 p-3 shadow-sm dark:bg-slate-950/40 sm:p-4 lg:grid-cols-[minmax(0,1fr)_150px_minmax(260px,360px)] lg:items-center">
                   <div className="min-w-0">
                     <p className="truncate text-lg font-black">{item.player?.name ?? 'Participante'}</p>
                     <p className="text-sm text-muted-foreground">{item.player?.primary_position ?? '-'} - {item.player?.whatsapp ?? 'Sem WhatsApp'}</p>
                   </div>
-                  <label className="flex items-center gap-2 rounded-lg bg-muted px-3 py-2 text-sm font-black">
-                    <input name={`present-${item.player_id}`} type="checkbox" defaultChecked={saved?.present ?? item.status !== 'FALTOU'} disabled={!canLaunchStats} className="size-4 accent-green-700" />
+                  <label className="flex min-h-12 items-center justify-center gap-2 rounded-lg bg-muted px-3 py-2 text-sm font-black lg:justify-start">
+                    <input name={`present-${item.player_id}`} type="checkbox" defaultChecked={saved?.present ?? item.status !== 'FALTOU'} disabled={!canLaunchStats} className="size-5 accent-green-700" />
                     Presente
                   </label>
-                  <label className="grid gap-1 text-sm font-black text-slate-700 dark:text-slate-200">
-                    Pontos
-                    <Input name={`goals-${item.player_id}`} type="number" min={0} defaultValue={saved?.goals ?? 0} disabled={!canLaunchStats} />
-                  </label>
-                  <label className="grid gap-1 text-sm font-black text-slate-700 dark:text-slate-200">
-                    Assistencias
-                    <Input name={`assists-${item.player_id}`} type="number" min={0} defaultValue={saved?.assists ?? 0} disabled={!canLaunchStats} />
-                  </label>
+                  <div className="grid min-w-0 grid-cols-2 gap-2 sm:gap-3">
+                    <label className="grid min-w-0 gap-1 text-sm font-black text-slate-700 dark:text-slate-200">
+                      Pontos
+                      <Input className="h-12 text-base font-black" name={`goals-${item.player_id}`} type="number" inputMode="numeric" min={0} defaultValue={saved?.goals ?? 0} disabled={!canLaunchStats} />
+                    </label>
+                    <label className="grid min-w-0 gap-1 text-sm font-black text-slate-700 dark:text-slate-200">
+                      Assistencias
+                      <Input className="h-12 text-base font-black" name={`assists-${item.player_id}`} type="number" inputMode="numeric" min={0} defaultValue={saved?.assists ?? 0} disabled={!canLaunchStats} />
+                    </label>
+                  </div>
                 </div>
               )
             })}
@@ -225,7 +227,7 @@ export function MatchStatsEntryPage() {
               </div>
             )}
           </div>
-          <Button className="min-h-12" disabled={saving || !rows.length || !canLaunchStats}>
+          <Button className="min-h-12 w-full" disabled={saving || !rows.length || !canLaunchStats}>
             {saving ? <LoaderCircle className="animate-spin" size={16} /> : <Save size={16} />}
             {saving ? 'Salvando...' : 'Salvar estatisticas'}
           </Button>

@@ -499,49 +499,46 @@ export function SchedulePage() {
                 )}
 
                 <form key={`${effectiveSelectedMatchId}-${matchStats.dataUpdatedAt}`} className="mt-4 grid gap-4" onSubmit={closeMatch}>
-                  <div className="overflow-x-auto rounded-lg border border-border bg-white/60 dark:bg-slate-950/30">
-                    <table className="w-full min-w-[760px] border-collapse text-sm">
-                      <thead className="bg-muted text-left">
-                        <tr>
-                          <th className="p-3">Participante</th>
-                          <th className="p-3 text-center">Presente</th>
-                          <th className="p-3">Pontos</th>
-                          <th className="p-3">Assistencias</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {presentCandidates.map((item) => {
-                          const saved = statsByPlayerId.get(item.player_id)
-                          return (
-                            <tr key={item.id} className="border-t border-border dark:border-slate-800">
-                              <td className="p-3">
-                                <p className="font-black">{item.player?.name ?? 'Participante'}</p>
-                                <p className="text-xs text-muted-foreground">{item.player?.primary_position ?? '-'}</p>
-                              </td>
-                              <td className="p-3 text-center">
-                                <input
-                                  name={`present-${item.player_id}`}
-                                  type="checkbox"
-                                  defaultChecked={saved?.present ?? item.status !== 'FALTOU'}
-                                  disabled={!canLaunchStats}
-                                  className="size-5 accent-green-700"
-                                />
-                              </td>
-                              <td className="p-3"><Input name={`goals-${item.player_id}`} type="number" min={0} defaultValue={saved?.goals ?? 0} disabled={!canLaunchStats} /></td>
-                              <td className="p-3"><Input name={`assists-${item.player_id}`} type="number" min={0} defaultValue={saved?.assists ?? 0} disabled={!canLaunchStats} /></td>
-                            </tr>
-                          )
-                        })}
-                        {!presentCandidates.length && (
-                          <tr>
-                            <td colSpan={4} className="p-8 text-center text-muted-foreground">Confirme participantes antes de lancar as estatisticas.</td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
+                  <div className="grid gap-3">
+                    {presentCandidates.map((item) => {
+                      const saved = statsByPlayerId.get(item.player_id)
+                      return (
+                        <div key={item.id} className="grid min-w-0 gap-4 rounded-xl border border-border bg-white/75 p-3 shadow-sm dark:bg-slate-950/40 sm:p-4 lg:grid-cols-[minmax(0,1fr)_150px_minmax(260px,360px)] lg:items-center">
+                          <div className="min-w-0">
+                            <p className="truncate text-lg font-black">{item.player?.name ?? 'Participante'}</p>
+                            <p className="text-sm text-muted-foreground">{item.player?.primary_position ?? '-'}</p>
+                          </div>
+                          <label className="flex min-h-12 items-center justify-center gap-2 rounded-lg bg-muted px-3 py-2 text-sm font-black lg:justify-start">
+                            <input
+                              name={`present-${item.player_id}`}
+                              type="checkbox"
+                              defaultChecked={saved?.present ?? item.status !== 'FALTOU'}
+                              disabled={!canLaunchStats}
+                              className="size-5 accent-green-700"
+                            />
+                            Presente
+                          </label>
+                          <div className="grid min-w-0 grid-cols-2 gap-2 sm:gap-3">
+                            <label className="grid min-w-0 gap-1 text-sm font-black text-slate-700 dark:text-slate-200">
+                              Pontos
+                              <Input className="h-12 text-base font-black" name={`goals-${item.player_id}`} type="number" inputMode="numeric" min={0} defaultValue={saved?.goals ?? 0} disabled={!canLaunchStats} />
+                            </label>
+                            <label className="grid min-w-0 gap-1 text-sm font-black text-slate-700 dark:text-slate-200">
+                              Assistencias
+                              <Input className="h-12 text-base font-black" name={`assists-${item.player_id}`} type="number" inputMode="numeric" min={0} defaultValue={saved?.assists ?? 0} disabled={!canLaunchStats} />
+                            </label>
+                          </div>
+                        </div>
+                      )
+                    })}
+                    {!presentCandidates.length && (
+                      <div className="rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
+                        Confirme participantes antes de lancar as estatisticas.
+                      </div>
+                    )}
                   </div>
 
-                  <Button disabled={savingStats || !presentCandidates.length || !canLaunchStats}>
+                  <Button className="min-h-12 w-full" disabled={savingStats || !presentCandidates.length || !canLaunchStats}>
                     {savingStats ? <LoaderCircle className="animate-spin" size={16} /> : <Save size={16} />}
                     {savingStats ? 'Salvando...' : 'Salvar estatisticas individuais'}
                   </Button>

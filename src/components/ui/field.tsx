@@ -11,13 +11,13 @@ export function Field({ label, children }: { label: string; children: ReactNode 
 }
 
 export function Input(props: InputHTMLAttributes<HTMLInputElement>) {
-  return <input className={cn('sport-field h-10 rounded-md border border-border bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-primary/30 dark:bg-slate-900', props.className)} {...props} />
+  return <input className={cn('sport-field h-10 w-full min-w-0 rounded-md border border-border bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-primary/30 dark:bg-slate-900', props.className)} {...props} />
 }
 
 export function Select(props: SelectHTMLAttributes<HTMLSelectElement>) {
-  return <select className={cn('sport-field h-10 rounded-md border border-border bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-primary/30 dark:bg-slate-900', props.className)} {...props} />
+  return <select className={cn('sport-field h-10 w-full min-w-0 rounded-md border border-border bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-primary/30 dark:bg-slate-900', props.className)} {...props} />
 }
 
 export function Textarea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return <textarea className={cn('sport-field min-h-24 rounded-md border border-border bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/30 dark:bg-slate-900', props.className)} {...props} />
+  return <textarea className={cn('sport-field min-h-24 w-full min-w-0 rounded-md border border-border bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/30 dark:bg-slate-900', props.className)} {...props} />
 }
