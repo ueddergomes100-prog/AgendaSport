@@ -14,6 +14,17 @@ const queryClient = new QueryClient({
   },
 })
 
+function disableBrowserTranslation() {
+  document.documentElement.lang = 'pt-BR'
+  document.documentElement.translate = false
+  document.documentElement.classList.add('notranslate')
+  document.body.translate = false
+  document.body.classList.add('notranslate')
+  document.getElementById('root')?.setAttribute('translate', 'no')
+}
+
+disableBrowserTranslation()
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>

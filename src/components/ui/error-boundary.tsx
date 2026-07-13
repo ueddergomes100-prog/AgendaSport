@@ -23,6 +23,8 @@ export class ErrorBoundary extends Component<Props, State> {
 
   render() {
     if (!this.state.error) return this.props.children
+    const message = this.state.error.message
+    const isDomMutationError = /insertBefore|removeChild|not a child/i.test(message)
 
     return (
       <main className="grid min-h-screen place-items-center bg-slate-50 px-4 text-slate-950 dark:bg-slate-950 dark:text-white">
@@ -32,10 +34,12 @@ export class ErrorBoundary extends Component<Props, State> {
           </div>
           <h1 className="mt-5 text-2xl font-black">Nao foi possivel carregar esta tela</h1>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            O Agenda Sport encontrou uma falha inesperada na interface. Tente recarregar a pagina.
+            {isDomMutationError
+              ? 'O navegador alterou a pagina automaticamente. Recarregue a tela para abrir o Agenda Sport novamente.'
+              : 'O Agenda Sport encontrou uma falha inesperada na interface. Tente recarregar a pagina.'}
           </p>
           <p className="mt-4 rounded-lg bg-muted px-3 py-2 text-xs font-semibold text-muted-foreground">
-            {this.state.error.message}
+            {isDomMutationError ? 'Se persistir, desative a traducao automatica nesta pagina.' : message}
           </p>
           <Button type="button" className="mt-5" onClick={() => window.location.reload()}>
             <RotateCcw size={16} />
