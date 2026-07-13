@@ -9,7 +9,7 @@ import { getAttendance, getMatches, saveTeamDraw } from '../lib/data'
 import { displayPosition, isGoalkeeperPosition } from '../lib/positions'
 import { buildBalancedTeams } from '../lib/team-draw'
 import type { TeamDraw, TeamDrawPlayer, TeamDrawTeam } from '../lib/types'
-import { getErrorMessage, percent } from '../lib/utils'
+import { compareTextPtBr, getErrorMessage, percent } from '../lib/utils'
 
 const accents = ['bg-primary text-white', 'bg-yellow-400 text-slate-950', 'bg-slate-950 text-white', 'bg-sky-500 text-white', 'bg-rose-500 text-white', 'bg-violet-500 text-white', 'bg-orange-500 text-white', 'bg-emerald-500 text-white']
 
@@ -26,7 +26,10 @@ export function DrawPage() {
 
   const selectedMatch = useMemo(() => (matches.data ?? []).find((match) => match.id === effectiveMatchId) ?? null, [matches.data, effectiveMatchId])
   const confirmedPlayers = useMemo(
-    () => (attendance.data ?? []).filter((item) => ['CONFIRMADO', 'COMPARECEU'].includes(item.status) && item.player).map((item) => ({ ...item.player!, attendance_id: item.id })),
+    () => (attendance.data ?? [])
+      .filter((item) => ['CONFIRMADO', 'COMPARECEU'].includes(item.status) && item.player)
+      .map((item) => ({ ...item.player!, attendance_id: item.id }))
+      .sort((left, right) => compareTextPtBr(left.name, right.name)),
     [attendance.data],
   )
   const goalkeepers = confirmedPlayers.filter((player) => isGoalkeeperPosition(player.primary_position)).length
@@ -120,7 +123,7 @@ export function DrawPage() {
         <DrawStat icon={<Users size={18} />} label="Confirmados" value={confirmedPlayers.length} />
         <DrawStat icon={<ShieldCheck size={18} />} label="Goleiros" value={goalkeepers} />
         <DrawStat icon={<Trophy size={18} />} label="Equipes" value={teamCount} />
-        <DrawStat icon={<Goal size={18} />} label="Equilibrio" value={percent(draw?.percentageDiff)} />
+        <DrawStat icon={<Goal size={18} />} label="Diferenca" value={percent(draw?.percentageDiff)} />
       </section>
 
       <Card className="overflow-hidden p-0">

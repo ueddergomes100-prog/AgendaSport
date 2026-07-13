@@ -38,7 +38,7 @@ import {
 import { displayPosition, isGoalkeeperPosition } from '../lib/positions'
 import { usePrimaryStatLabel } from '../lib/stats-labels'
 import type { Attendance, AttendanceStatus, Match, Pickup } from '../lib/types'
-import { cn, getErrorMessage } from '../lib/utils'
+import { cn, compareTextPtBr, getErrorMessage } from '../lib/utils'
 
 const statusLabels: Record<AttendanceStatus, string> = {
   CONVIDADO: 'Convidado',
@@ -105,7 +105,10 @@ export function SchedulePage() {
   })
 
   const activePlayers = useMemo(() => (players.data ?? []).filter((player) => player.status === 'ATIVO'), [players.data])
-  const attendanceRows = attendance.data ?? []
+  const attendanceRows = useMemo(
+    () => [...(attendance.data ?? [])].sort((left, right) => compareTextPtBr(left.player?.name, right.player?.name)),
+    [attendance.data],
+  )
   const statsByPlayerId = useMemo(
     () => new Map((matchStats.data ?? []).map((row) => [row.player_id, row] as const)),
     [matchStats.data],

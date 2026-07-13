@@ -19,7 +19,7 @@ import {
 import { displayPosition } from '../lib/positions'
 import { usePrimaryStatLabel } from '../lib/stats-labels'
 import type { Match } from '../lib/types'
-import { getErrorMessage } from '../lib/utils'
+import { compareTextPtBr, getErrorMessage } from '../lib/utils'
 
 export function MatchStatsEntryPage() {
   const { matchId = '' } = useParams()
@@ -37,7 +37,9 @@ export function MatchStatsEntryPage() {
   const selectedPickup = useMemo(() => (pickups.data ?? []).find((pickup) => pickup.id === selectedMatch?.pickup_id) ?? null, [pickups.data, selectedMatch])
   const statsByPlayerId = useMemo(() => new Map((matchStats.data ?? []).map((row) => [row.player_id, row] as const)), [matchStats.data])
   const rows = useMemo(
-    () => (attendance.data ?? []).filter((row) => ['CONFIRMADO', 'COMPARECEU', 'FALTOU'].includes(row.status) && row.player),
+    () => (attendance.data ?? [])
+      .filter((row) => ['CONFIRMADO', 'COMPARECEU', 'FALTOU'].includes(row.status) && row.player)
+      .sort((left, right) => compareTextPtBr(left.player?.name, right.player?.name)),
     [attendance.data],
   )
   const canLaunchStats = selectedMatch ? isSameLocalDate(new Date(selectedMatch.scheduled_at), new Date()) : false

@@ -29,3 +29,7 @@ export function nullableFormValue(value: FormDataEntryValue | null) {
   const text = String(value ?? '').trim()
   return text || null
 }
+
+export function compareTextPtBr(left?: string | null, right?: string | null) {
+  return (left ?? '').localeCompare(right ?? '', 'pt-BR', { sensitivity: 'base' })
+}
