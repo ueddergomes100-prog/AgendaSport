@@ -189,7 +189,7 @@ app.post('/api/public-registration/:token/players', async (req, res) => {
     const firstName = input.first_name.trim()
     const lastName = input.last_name.trim()
     const fullName = `${firstName} ${lastName}`
-    const position = input.position_kind === 'GOLEIRO' ? 'GOLEIRO' : 'LINHA'
+    const position = input.position_kind === 'GOLEIRO' ? 'Goleiro' : 'Meio Campo'
     const basePlayerPayload = {
       tenant_id: company.id,
       first_name: firstName,

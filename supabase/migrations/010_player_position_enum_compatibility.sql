@@ -179,8 +179,8 @@ begin
 
   v_full_name := concat_ws(' ', v_first_name, v_last_name);
   v_position := case upper(coalesce(p_position_kind, 'LINHA'))
-    when 'GOLEIRO' then 'GOLEIRO'::player_position
-    else 'LINHA'::player_position
+    when 'GOLEIRO' then 'Goleiro'::player_position
+    else 'Meio Campo'::player_position
   end;
 
   insert into players (

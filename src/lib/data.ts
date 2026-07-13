@@ -1,5 +1,5 @@
 import { supabase } from './supabase'
-import { toUpperDbPosition } from './positions'
+import { toDbPosition } from './positions'
 import type { Attendance, Company, DashboardStats, Match, MatchTeamResult, Pickup, Player, PlayerStatRow, Profile, TeamDrawRecord } from './types'
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
@@ -222,7 +222,7 @@ async function preparePlayerPayload(input: Partial<Player>, tenantId: string, cu
     name: `${firstName} ${lastName}`.trim(),
     whatsapp,
     whatsapp_normalized: normalized,
-    primary_position: toUpperDbPosition(input.primary_position),
+    primary_position: toDbPosition(input.primary_position),
     status,
     suspended_at: status === 'SUSPENSO' ? (input.suspended_at ?? new Date().toISOString()) : null,
     suspension_reason: status === 'SUSPENSO' ? (input.suspension_reason ?? input.notes ?? null) : null,
