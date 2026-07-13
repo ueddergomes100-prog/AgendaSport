@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { AppShell } from './components/layout/AppShell'
+import { ErrorBoundary } from './components/ui/error-boundary'
 import { LoadingState } from './components/ui/sport'
 import { getProfile } from './lib/data'
 import { supabase } from './lib/supabase'
@@ -42,6 +43,9 @@ function ProtectedApp() {
 
   if (!ready || profile.isLoading) return <LoadingState />
   if (!hasSession) return <Navigate to="/login" replace />
+  if (profile.isError) {
+    return <LoadingState label="Nao foi possivel carregar seu perfil. Recarregue a pagina." />
+  }
   if (!profile.data) return <Navigate to="/login" replace />
 
   return <AppShell profile={profile.data} darkMode={darkMode} setDarkMode={setDarkMode} />
@@ -50,6 +54,7 @@ function ProtectedApp() {
 function TenantOnly({ children }: { children: ReactNode }) {
   const profile = useQuery({ queryKey: ['profile'], queryFn: getProfile })
   if (profile.isLoading) return <LoadingState />
+  if (profile.isError) return <LoadingState label="Nao foi possivel carregar os dados da empresa." />
   if (!profile.data) return <Navigate to="/login" replace />
   if (profile.data.role === 'SUPER_ADMIN' || !profile.data.tenant_id) return <Navigate to="/" replace />
   return children
@@ -57,24 +62,26 @@ function TenantOnly({ children }: { children: ReactNode }) {
 
 export default function App() {
   return (
-    <Routes>
-      <Route path="/login" element={<LoginPage />} />
-      <Route path="/portal" element={<PortalPage />} />
-      <Route path="/inscricao/:token" element={<PublicRegistrationPage />} />
-      <Route element={<ProtectedApp />}>
-        <Route path="/" element={<DashboardPage />} />
-        <Route path="/participantes" element={<TenantOnly><PlayersPage /></TenantOnly>} />
-        <Route path="/eventos" element={<TenantOnly><PickupsPage /></TenantOnly>} />
-        <Route path="/jogadores" element={<Navigate to="/participantes" replace />} />
-        <Route path="/peladas" element={<Navigate to="/eventos" replace />} />
-        <Route path="/agenda" element={<TenantOnly><SchedulePage /></TenantOnly>} />
-        <Route path="/lancamento/:matchId" element={<TenantOnly><MatchStatsEntryPage /></TenantOnly>} />
-        <Route path="/sorteio" element={<TenantOnly><DrawPage /></TenantOnly>} />
-        <Route path="/estatisticas" element={<TenantOnly><StatsPage /></TenantOnly>} />
-        <Route path="/financeiro" element={<TenantOnly><FinancePage /></TenantOnly>} />
-        <Route path="/admin" element={<AdminPage />} />
-      </Route>
-      <Route path="*" element={<NotFoundPage />} />
-    </Routes>
+    <ErrorBoundary>
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/portal" element={<PortalPage />} />
+        <Route path="/inscricao/:token" element={<PublicRegistrationPage />} />
+        <Route element={<ProtectedApp />}>
+          <Route path="/" element={<DashboardPage />} />
+          <Route path="/participantes" element={<TenantOnly><PlayersPage /></TenantOnly>} />
+          <Route path="/eventos" element={<TenantOnly><PickupsPage /></TenantOnly>} />
+          <Route path="/jogadores" element={<Navigate to="/participantes" replace />} />
+          <Route path="/peladas" element={<Navigate to="/eventos" replace />} />
+          <Route path="/agenda" element={<TenantOnly><SchedulePage /></TenantOnly>} />
+          <Route path="/lancamento/:matchId" element={<TenantOnly><MatchStatsEntryPage /></TenantOnly>} />
+          <Route path="/sorteio" element={<TenantOnly><DrawPage /></TenantOnly>} />
+          <Route path="/estatisticas" element={<TenantOnly><StatsPage /></TenantOnly>} />
+          <Route path="/financeiro" element={<TenantOnly><FinancePage /></TenantOnly>} />
+          <Route path="/admin" element={<AdminPage />} />
+        </Route>
+        <Route path="*" element={<NotFoundPage />} />
+      </Routes>
+    </ErrorBoundary>
   )
 }

@@ -21,7 +21,6 @@ import { Field, Input, Select, Textarea } from '../components/ui/field'
 import { AnimatedPage, ConfirmDialog } from '../components/ui/sport'
 import {
   createMatch,
-  createMatches,
   deleteMatch,
   getAttendance,
   getLatestTeamDraw,
@@ -55,8 +54,6 @@ const statusStyles: Record<AttendanceStatus, string> = {
   COMPARECEU: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-100',
   FALTOU: 'bg-zinc-200 text-zinc-800 dark:bg-zinc-800 dark:text-zinc-100',
 }
-
-const weekdays = ['Domingo', 'Segunda', 'Terca', 'Quarta', 'Quinta', 'Sexta', 'Sabado']
 
 export function SchedulePage() {
   const matches = useQuery({ queryKey: ['matches'], queryFn: getMatches })
@@ -112,6 +109,7 @@ export function SchedulePage() {
   const presentCandidates = attendanceRows.filter((row) => ['CONFIRMADO', 'COMPARECEU', 'FALTOU'].includes(row.status) && row.player)
   const invitedPlayerIds = new Set(attendanceRows.map((row) => row.player_id))
   const counts = countAttendance(attendanceRows)
+  const roleCounts = countRoleAttendance(attendanceRows)
   const canLaunchStats = selectedMatch ? isSameLocalDate(new Date(selectedMatch.scheduled_at), new Date()) : false
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -122,25 +120,29 @@ export function SchedulePage() {
     try {
       const form = new FormData(formElement)
       const pickupId = String(form.get('pickup_id') || '') || null
+      const pickup = pickupId ? pickupById.get(pickupId) ?? null : null
       const scheduledAt = new Date(String(form.get('scheduled_at')))
       const recurrenceMonths = Number(form.get('recurrence_months') || 0)
+      const maxLinePlayers = Number(form.get('max_line_players') || pickup?.max_line_players || pickup?.max_players || 0)
+      const maxGoalkeepers = Number(form.get('max_goalkeepers') || pickup?.max_goalkeepers || 0)
+      const recurrenceUntil = recurrenceMonths > 0 ? addMonthsDate(scheduledAt, recurrenceMonths) : null
       const baseInput = {
         pickup_id: pickupId,
         scheduled_at: scheduledAt.toISOString(),
         notes: String(form.get('notes') || ''),
         status: 'AGENDADA',
+        max_line_players: maxLinePlayers,
+        max_goalkeepers: maxGoalkeepers,
+        recurrence_until: recurrenceUntil ? toDateOnly(recurrenceUntil) : null,
+        recurrence_weekday: recurrenceMonths > 0 ? scheduledAt.getDay() : null,
+        recurrence_start_time: recurrenceMonths > 0 ? toTimeOnly(scheduledAt) : null,
+        recurrence_months: recurrenceMonths || null,
       } as const
-      const recurringDates = recurrenceMonths > 0
-        ? buildWeeklySchedule(scheduledAt, recurrenceMonths)
-        : [scheduledAt]
-      const createdMatches = recurrenceMonths > 0
-        ? await createMatches(recurringDates.map((date) => ({ ...baseInput, scheduled_at: date.toISOString() })))
-        : [await createMatch(baseInput)]
-      const match = createdMatches[0]
+      const match = await createMatch(baseInput)
       await matches.refetch()
       setSelectedMatchId(match.id)
       formElement.reset()
-      setFeedback(createdMatches.length > 1 ? `${createdMatches.length} eventos agendados. Agora voce pode abrir a convocacao.` : 'Evento criado. Agora voce pode abrir a convocacao.')
+      setFeedback(recurrenceMonths > 0 ? 'Evento criado. A proxima data recorrente sera criada somente apos finalizar este evento.' : 'Evento criado. Agora voce pode abrir a convocacao.')
     } catch (error) {
       setFeedback(getErrorMessage(error, 'Nao foi possivel criar o evento.'))
     } finally {
@@ -169,6 +171,18 @@ export function SchedulePage() {
       setFeedback(getErrorMessage(error, 'Nao foi possivel convocar os participantes.'))
     } finally {
       setSavingInvite(false)
+    }
+  }
+
+  async function setManualResponse(item: Attendance, status: AttendanceStatus) {
+    if (!selectedMatch) return
+    setFeedback('')
+    try {
+      await upsertAttendance(selectedMatch.id, item.player_id, status)
+      await Promise.all([attendance.refetch(), matches.refetch()])
+      setFeedback(`Resposta de ${item.player?.name ?? 'participante'} atualizada para ${statusLabels[status]}.`)
+    } catch (error) {
+      setFeedback(getErrorMessage(error, 'Nao foi possivel atualizar a resposta manualmente.'))
     }
   }
 
@@ -252,13 +266,28 @@ export function SchedulePage() {
         rows,
       )
       let nextMatch: Match | null = null
-      if (selectedPickup && window.confirm(`Evento encerrado. Ja quer agendar automaticamente a proxima ${weekdays[selectedPickup.weekday]}?`)) {
-        nextMatch = await createMatch({
-          pickup_id: selectedPickup.id,
-          scheduled_at: getNextPickupDate(selectedPickup.weekday, selectedPickup.start_time, new Date(selectedMatch.scheduled_at)),
-          status: 'AGENDADA',
-          notes: `Agenda automatica: ${selectedPickup.name}`,
-        })
+      const nextDate = getNextRecurringDate(selectedMatch, selectedPickup)
+      if (nextDate && window.confirm(`Evento encerrado. Deseja agendar a proxima data automaticamente para ${formatDate(nextDate.toISOString())} as ${formatTime(nextDate.toISOString())}?`)) {
+        const alreadyExists = (matches.data ?? []).some((match) => (
+          match.id !== selectedMatch.id &&
+          match.pickup_id === selectedMatch.pickup_id &&
+          new Date(match.scheduled_at).getTime() === nextDate.getTime()
+        ))
+        if (!alreadyExists) {
+          nextMatch = await createMatch({
+            pickup_id: selectedMatch.pickup_id,
+            scheduled_at: nextDate.toISOString(),
+            status: 'AGENDADA',
+            notes: `Agenda automatica: ${selectedPickup?.name ?? selectedMatchTitle}`,
+            max_line_players: selectedMatch.max_line_players,
+            max_goalkeepers: selectedMatch.max_goalkeepers,
+            recurrence_until: selectedMatch.recurrence_until,
+            recurrence_weekday: selectedMatch.recurrence_weekday,
+            recurrence_start_time: selectedMatch.recurrence_start_time,
+            recurrence_months: selectedMatch.recurrence_months,
+            recurrence_source_match_id: selectedMatch.id,
+          })
+        }
       }
       await Promise.all([matches.refetch(), attendance.refetch(), matchStats.refetch()])
       if (nextMatch) setSelectedMatchId(nextMatch.id)
@@ -304,11 +333,16 @@ export function SchedulePage() {
               <Field label="Recorrencia semanal">
                 <Select name="recurrence_months" defaultValue="0">
                   <option value="0">Agendar somente esta data</option>
-                  <option value="1">Agendar toda semana por 1 mes</option>
-                  <option value="2">Agendar toda semana por 2 meses</option>
-                  <option value="3">Agendar toda semana por 3 meses</option>
+                  <option value="1">Criar proxima ao finalizar, por 1 mes</option>
+                  <option value="2">Criar proxima ao finalizar, por 2 meses</option>
+                  <option value="3">Criar proxima ao finalizar, por 3 meses</option>
                 </Select>
+                <p className="mt-2 text-xs font-semibold text-muted-foreground">Apenas este evento sera criado agora. Os proximos nascem apos a finalizacao.</p>
               </Field>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="Vagas linha"><Input name="max_line_players" type="number" min={0} defaultValue={18} /></Field>
+                <Field label="Vagas goleiro"><Input name="max_goalkeepers" type="number" min={0} defaultValue={2} /></Field>
+              </div>
               <Field label="Observacoes"><Textarea name="notes" /></Field>
               <Button disabled={savingMatch}>
                 {savingMatch ? <LoaderCircle className="animate-spin" size={16} /> : <CalendarPlus size={16} />}
@@ -367,7 +401,7 @@ export function SchedulePage() {
                       <span className="rounded-md bg-white/15 px-2 py-1 text-xs font-black uppercase tracking-wide">{selectedMatch.status}</span>
                       <h2 className="mt-4 text-3xl font-black">{selectedMatchTitle}</h2>
                       <p className="mt-2 text-sm text-white/75">{formatDate(selectedMatch.scheduled_at)} as {formatTime(selectedMatch.scheduled_at)}</p>
-                      <p className="mt-1 text-sm text-white/75">{selectedPickup ? `${selectedPickup.place} - capacidade ${selectedPickup.max_players}` : 'Evento avulso'}</p>
+                      <p className="mt-1 text-sm text-white/75">{selectedPickup ? `${selectedPickup.place} - linha ${selectedMatch.max_line_players ?? selectedPickup.max_line_players ?? selectedPickup.max_players}, goleiros ${selectedMatch.max_goalkeepers ?? selectedPickup.max_goalkeepers ?? 0}` : 'Evento avulso'}</p>
                     </div>
                     <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-1">
                       <Button type="button" onClick={callPlayers} disabled={savingInvite || !activePlayers.length}>
@@ -400,9 +434,10 @@ export function SchedulePage() {
                 {feedback && <p className="m-5 rounded-md bg-muted px-3 py-2 text-sm text-slate-700 dark:text-slate-200">{feedback}</p>}
               </Card>
 
-              <section className="grid gap-4 lg:grid-cols-3">
+              <section className="grid gap-4 lg:grid-cols-4">
                 <Card><RoundInline icon={<Users size={18} />} label="Convidados" value={attendanceRows.length} /></Card>
-                <Card><RoundInline icon={<CheckCircle2 size={18} />} label="Confirmados" value={counts.CONFIRMADO + counts.COMPARECEU} /></Card>
+                <Card><RoundInline icon={<CheckCircle2 size={18} />} label="Linha confirmada" value={roleCounts.lineConfirmed} /></Card>
+                <Card><RoundInline icon={<CircleDashed size={18} />} label="Goleiros confirmados" value={roleCounts.goalkeeperConfirmed} /></Card>
                 <Card><RoundInline icon={<CircleDashed size={18} />} label="Fila de espera" value={counts.ESPERA} /></Card>
               </section>
 
@@ -428,7 +463,17 @@ export function SchedulePage() {
                         </div>
                         <p className="mt-1 text-xs text-muted-foreground">{item.player?.primary_position ?? '-'} - {item.player?.whatsapp ?? 'Sem WhatsApp'}</p>
                       </div>
-                      <ResponseHint status={item.status} />
+                      <div className="grid gap-2">
+                        <ResponseHint status={item.status} />
+                        {selectedMatch.status !== 'ENCERRADA' && selectedMatch.status !== 'CANCELADA' && (
+                          <div className="flex flex-wrap justify-end gap-2">
+                            <Button type="button" variant="secondary" className="h-9 px-3" onClick={() => setManualResponse(item, 'CONFIRMADO')}>Sim</Button>
+                            <Button type="button" variant="secondary" className="h-9 px-3" onClick={() => setManualResponse(item, 'RECUSOU')}>Nao</Button>
+                            <Button type="button" variant="secondary" className="h-9 px-3" onClick={() => setManualResponse(item, 'ESPERA')}>Espera</Button>
+                            <Button type="button" variant="ghost" className="h-9 px-3" onClick={() => setManualResponse(item, 'CONVIDADO')}>Aguardando</Button>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   ))}
                   {!attendanceRows.length && (
@@ -568,6 +613,18 @@ function countAttendance(rows: Attendance[]) {
   )
 }
 
+function countRoleAttendance(rows: Attendance[]) {
+  return rows.reduce(
+    (acc, row) => {
+      const confirmed = ['CONFIRMADO', 'COMPARECEU'].includes(row.status)
+      if (confirmed && row.player?.primary_position === 'Goleiro') acc.goalkeeperConfirmed += 1
+      if (confirmed && row.player?.primary_position !== 'Goleiro') acc.lineConfirmed += 1
+      return acc
+    },
+    { lineConfirmed: 0, goalkeeperConfirmed: 0 },
+  )
+}
+
 function ResponseHint({ status }: { status: AttendanceStatus }) {
   const text: Record<AttendanceStatus, string> = {
     CONVIDADO: 'Aguardando resposta',
@@ -601,26 +658,38 @@ function formatMatchTitle(match: Match, pickup: Pickup | null) {
   return pickup?.name || match.notes?.trim() || 'Evento avulso'
 }
 
-function getNextPickupDate(weekday: number, startTime: string, from: Date) {
+function getNextRecurringDate(match: Match, pickup: Pickup | null) {
+  if (!match.recurrence_until) return null
+  const weekday = match.recurrence_weekday ?? pickup?.weekday
+  const startTime = match.recurrence_start_time ?? pickup?.start_time
+  if (weekday == null || !startTime) return null
+  const next = getNextDateForWeekday(weekday, startTime, new Date(match.scheduled_at))
+  const end = new Date(`${match.recurrence_until}T23:59:59`)
+  return next <= end ? next : null
+}
+
+function getNextDateForWeekday(weekday: number, startTime: string, from: Date) {
   const [hours, minutes] = startTime.split(':').map(Number)
   const date = new Date(from)
   const daysAhead = (weekday - date.getDay() + 7) % 7
   date.setDate(date.getDate() + daysAhead)
   date.setHours(hours || 0, minutes || 0, 0, 0)
   if (date <= from) date.setDate(date.getDate() + 7)
-  return date.toISOString()
+  return date
 }
 
-function buildWeeklySchedule(firstDate: Date, months: number) {
-  const end = new Date(firstDate)
-  end.setMonth(end.getMonth() + months)
-  const dates: Date[] = []
-  const current = new Date(firstDate)
-  while (current <= end) {
-    dates.push(new Date(current))
-    current.setDate(current.getDate() + 7)
-  }
-  return dates
+function addMonthsDate(date: Date, months: number) {
+  const next = new Date(date)
+  next.setMonth(next.getMonth() + months)
+  return next
+}
+
+function toDateOnly(date: Date) {
+  return date.toISOString().slice(0, 10)
+}
+
+function toTimeOnly(date: Date) {
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
 }
 
 function isSameLocalDate(left: Date, right: Date) {

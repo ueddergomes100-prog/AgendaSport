@@ -19,8 +19,6 @@ import {
 import type { Match } from '../lib/types'
 import { getErrorMessage } from '../lib/utils'
 
-const weekdays = ['Domingo', 'Segunda', 'Terca', 'Quarta', 'Quinta', 'Sexta', 'Sabado']
-
 export function MatchStatsEntryPage() {
   const { matchId = '' } = useParams()
   const navigate = useNavigate()
@@ -91,13 +89,28 @@ export function MatchStatsEntryPage() {
       )
 
       let nextMatch: Match | null = null
-      if (selectedPickup && window.confirm(`Estatisticas salvas. Ja quer agendar automaticamente a proxima ${weekdays[selectedPickup.weekday]}?`)) {
-        nextMatch = await createMatch({
-          pickup_id: selectedPickup.id,
-          scheduled_at: getNextPickupDate(selectedPickup.weekday, selectedPickup.start_time, new Date(selectedMatch.scheduled_at)),
-          status: 'AGENDADA',
-          notes: `Agenda automatica: ${selectedPickup.name}`,
-        })
+      const nextDate = getNextRecurringDate(selectedMatch, selectedPickup)
+      if (nextDate && window.confirm(`Estatisticas salvas. Deseja agendar a proxima data para ${formatDateTime(nextDate.toISOString())}?`)) {
+        const alreadyExists = (matches.data ?? []).some((match) => (
+          match.id !== selectedMatch.id &&
+          match.pickup_id === selectedMatch.pickup_id &&
+          new Date(match.scheduled_at).getTime() === nextDate.getTime()
+        ))
+        if (!alreadyExists) {
+          nextMatch = await createMatch({
+            pickup_id: selectedMatch.pickup_id,
+            scheduled_at: nextDate.toISOString(),
+            status: 'AGENDADA',
+            notes: `Agenda automatica: ${selectedPickup?.name ?? selectedMatch.notes ?? 'evento'}`,
+            max_line_players: selectedMatch.max_line_players,
+            max_goalkeepers: selectedMatch.max_goalkeepers,
+            recurrence_until: selectedMatch.recurrence_until,
+            recurrence_weekday: selectedMatch.recurrence_weekday,
+            recurrence_start_time: selectedMatch.recurrence_start_time,
+            recurrence_months: selectedMatch.recurrence_months,
+            recurrence_source_match_id: selectedMatch.id,
+          })
+        }
       }
 
       await Promise.all([matches.refetch(), attendance.refetch(), matchStats.refetch()])
@@ -148,7 +161,7 @@ export function MatchStatsEntryPage() {
             <span className="rounded-md bg-white/15 px-2 py-1 text-xs font-black uppercase tracking-wide">Sumula digital</span>
             <h1 className="mt-4 text-3xl font-black">{selectedPickup?.name || selectedMatch.notes || 'Evento avulso'}</h1>
             <p className="mt-2 text-sm text-white/75">{formatDateTime(selectedMatch.scheduled_at)}</p>
-            <p className="mt-1 text-sm text-white/75">{selectedPickup ? `${selectedPickup.place} - capacidade ${selectedPickup.max_players}` : 'Lancamento individual'}</p>
+            <p className="mt-1 text-sm text-white/75">{selectedPickup ? `${selectedPickup.place} - linha ${selectedMatch.max_line_players ?? selectedPickup.max_line_players ?? selectedPickup.max_players}, goleiros ${selectedMatch.max_goalkeepers ?? selectedPickup.max_goalkeepers ?? 0}` : 'Lancamento individual'}</p>
           </div>
           <Button asChild variant="secondary" className="bg-white/90 text-slate-950 hover:bg-white">
             <Link to="/agenda">
@@ -238,14 +251,24 @@ function formatDateTime(value: string) {
   return new Date(value).toLocaleString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
-function getNextPickupDate(weekday: number, startTime: string, from: Date) {
+function getNextRecurringDate(match: Match, pickup: { weekday: number; start_time: string } | null) {
+  if (!match.recurrence_until) return null
+  const weekday = match.recurrence_weekday ?? pickup?.weekday
+  const startTime = match.recurrence_start_time ?? pickup?.start_time
+  if (weekday == null || !startTime) return null
+  const next = getNextDateForWeekday(weekday, startTime, new Date(match.scheduled_at))
+  const end = new Date(`${match.recurrence_until}T23:59:59`)
+  return next <= end ? next : null
+}
+
+function getNextDateForWeekday(weekday: number, startTime: string, from: Date) {
   const [hours, minutes] = startTime.split(':').map(Number)
   const date = new Date(from)
   const daysAhead = (weekday - date.getDay() + 7) % 7
   date.setDate(date.getDate() + daysAhead)
   date.setHours(hours || 0, minutes || 0, 0, 0)
   if (date <= from) date.setDate(date.getDate() + 7)
-  return date.toISOString()
+  return date
 }
 
 function isSameLocalDate(left: Date, right: Date) {

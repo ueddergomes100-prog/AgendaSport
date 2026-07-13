@@ -142,6 +142,108 @@ app.post('/api/onboarding/signup', async (req, res) => {
   }
 })
 
+function normalizeWhatsApp(value: string) {
+  const digits = value.replace(/\D/g, '')
+  if (digits.length < 10) return ''
+  const local = digits.startsWith('55') ? digits.slice(2) : digits
+  if (local.length === 11 && local[2] === '9') return `${local.slice(0, 2)}${local.slice(3)}`
+  return local
+}
+
+app.post('/api/public-registration/:token/players', async (req, res) => {
+  const paramsSchema = z.object({ token: z.string().uuid() })
+  const bodySchema = z.object({
+    first_name: z.string().trim().min(2, 'Informe seu nome.').max(80),
+    last_name: z.string().trim().min(2, 'Informe seu sobrenome.').max(120),
+    whatsapp: z.string().min(8),
+    position_kind: z.enum(['GOLEIRO', 'LINHA']).default('LINHA'),
+  })
+
+  try {
+    const { token } = paramsSchema.parse(req.params)
+    const input = bodySchema.parse(req.body)
+    const normalized = normalizeWhatsApp(input.whatsapp)
+    if (!normalized) return res.status(400).json({ error: 'Informe um WhatsApp valido com DDD.' })
+
+    const { data: company, error: companyError } = await adminSupabase
+      .from('companies')
+      .select('id, name, status, registration_enabled')
+      .eq('registration_token', token)
+      .single()
+
+    if (companyError || !company || !company.registration_enabled || ['BLOQUEADA', 'CANCELADA'].includes(company.status)) {
+      return res.status(404).json({ error: 'Link de inscricao invalido ou indisponivel.' })
+    }
+
+    const { data: existingPlayers, error: existingError } = await adminSupabase
+      .from('players')
+      .select('id, whatsapp, whatsapp_normalized')
+      .eq('tenant_id', company.id)
+    if (existingError) throw existingError
+
+    const exists = (existingPlayers ?? []).some((player) => (player.whatsapp_normalized || normalizeWhatsApp(player.whatsapp ?? '')) === normalized)
+    if (exists) {
+      return res.status(409).json({ error: 'Este WhatsApp ja esta cadastrado nesta empresa. Se precisar alterar seus dados, fale com o organizador.' })
+    }
+
+    const firstName = input.first_name.trim()
+    const lastName = input.last_name.trim()
+    const fullName = `${firstName} ${lastName}`
+    const position = input.position_kind === 'GOLEIRO' ? 'Goleiro' : 'Linha'
+
+    const { data: player, error: insertError } = await adminSupabase
+      .from('players')
+      .insert({
+        tenant_id: company.id,
+        first_name: firstName,
+        last_name: lastName,
+        name: fullName,
+        whatsapp: input.whatsapp.replace(/\D/g, ''),
+        whatsapp_normalized: normalized,
+        status: 'ATIVO',
+        type: 'AVULSO',
+        technical_score: 5,
+        primary_position: position,
+        notes: position === 'Goleiro' ? 'Autoinscricao: goleiro' : 'Autoinscricao: jogador de linha',
+      })
+      .select('id, name, whatsapp')
+      .single()
+
+    if (insertError) throw insertError
+
+    const message = [
+      'Agenda Sport',
+      '',
+      'Cadastro concluido com sucesso!',
+      `Ola, ${firstName}. Voce entrou na lista da ${company.name}.`,
+      '',
+      'Quando houver um evento, voce recebera a convocacao por este WhatsApp.',
+    ].join('\n')
+
+    const whatsappResult = await sendWhatsAppMessage({
+      tenant_id: company.id,
+      player_id: player.id,
+      phone: player.whatsapp,
+      type: 'LEMBRETE',
+      template: null,
+      message,
+      metadata: { source: 'public_registration_success' },
+    }).catch((error) => ({ status: 'FAILED', response: error instanceof Error ? error.message : 'Falha ao enviar WhatsApp de cadastro.' }))
+
+    return res.status(201).json({
+      player_id: player.id,
+      name: player.name,
+      company: company.name,
+      whatsapp_status: whatsappResult.status,
+    })
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ error: error.issues[0]?.message ?? 'Dados invalidos.' })
+    }
+    return res.status(400).json({ error: error instanceof Error ? error.message : 'Nao foi possivel concluir sua inscricao.' })
+  }
+})
+
 function requireRequestTenantId(user: AuthUser) {
   if (user.tenant_id) return user.tenant_id
   if (user.role === 'SUPER_ADMIN') {

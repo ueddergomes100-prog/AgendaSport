@@ -1,9 +1,9 @@
 export type UserRole = 'SUPER_ADMIN' | 'ADMINISTRADOR' | 'ORGANIZADOR' | 'OPERADOR' | 'JOGADOR'
 export type PlanCode = 'Starter' | 'Pro' | 'Elite'
 export type CompanyStatus = 'ATIVA' | 'BLOQUEADA' | 'TRIAL' | 'CANCELADA'
-export type PlayerStatus = 'ATIVO' | 'INATIVO'
+export type PlayerStatus = 'ATIVO' | 'INATIVO' | 'SUSPENSO'
 export type PlayerType = 'MENSALISTA' | 'AVULSO'
-export type Position = 'Goleiro' | 'Linha' | 'Zagueiro' | 'Lateral' | 'Volante' | 'Meio Campo' | 'Atacante'
+export type Position = 'Goleiro' | 'Linha'
 export type AttendanceStatus = 'CONVIDADO' | 'CONFIRMADO' | 'RECUSOU' | 'ESPERA' | 'COMPARECEU' | 'FALTOU'
 
 export type Profile = {
@@ -34,6 +34,8 @@ export type Player = {
   id: string
   tenant_id: string
   photo_url: string | null
+  first_name: string | null
+  last_name: string | null
   name: string
   phone: string | null
   whatsapp: string | null
@@ -41,6 +43,10 @@ export type Player = {
   email: string | null
   notes: string | null
   status: PlayerStatus
+  suspension_reason: string | null
+  suspended_until: string | null
+  suspended_at: string | null
+  whatsapp_normalized: string | null
   type: PlayerType
   technical_score: number
   primary_position: Position
@@ -59,6 +65,8 @@ export type Pickup = {
   casual_price: number
   monthly_price: number
   max_players: number
+  max_line_players: number | null
+  max_goalkeepers: number | null
   mensalista_priority_hours: number
 }
 
@@ -74,6 +82,13 @@ export type Match = {
   team_results: MatchTeamResult[] | null
   notes: string | null
   status: 'AGENDADA' | 'ABERTA' | 'ENCERRADA' | 'CANCELADA'
+  max_line_players: number | null
+  max_goalkeepers: number | null
+  recurrence_until: string | null
+  recurrence_weekday: number | null
+  recurrence_start_time: string | null
+  recurrence_months: number | null
+  recurrence_source_match_id: string | null
 }
 
 export type Attendance = {
@@ -84,6 +99,8 @@ export type Attendance = {
   status: AttendanceStatus
   responded_at: string | null
   queue_position: number | null
+  response_source: 'WHATSAPP' | 'MANUAL' | 'SYSTEM' | string
+  responded_by: string | null
   player?: Player
 }
 

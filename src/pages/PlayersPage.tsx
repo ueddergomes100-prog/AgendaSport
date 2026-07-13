@@ -9,7 +9,7 @@ import { createPlayer, deletePlayer, getCurrentCompany, getPlayers, updatePlayer
 import type { Company, Player, Position } from '../lib/types'
 import { cn, getErrorMessage } from '../lib/utils'
 
-const positions: Position[] = ['Goleiro', 'Meio Campo']
+const positions: Position[] = ['Goleiro', 'Linha']
 
 export function PlayersPage() {
   const players = useQuery({ queryKey: ['players'], queryFn: getPlayers })
@@ -33,6 +33,7 @@ export function PlayersPage() {
   }, [roster, search])
 
   const activeCount = roster.filter((player) => player.status === 'ATIVO').length
+  const suspendedCount = roster.filter((player) => player.status === 'SUSPENSO').length
   const mensalistas = roster.filter((player) => player.type === 'MENSALISTA').length
   const goalkeepers = roster.filter((player) => player.primary_position === 'Goleiro').length
   const linePlayers = roster.length - goalkeepers
@@ -66,12 +67,15 @@ export function PlayersPage() {
     try {
       const form = new FormData(formElement)
       const payload: Partial<Player> = {
-        name: String(form.get('name')).trim(),
+        first_name: String(form.get('first_name')).trim(),
+        last_name: String(form.get('last_name')).trim(),
         phone: null,
         whatsapp: String(form.get('whatsapp') || '').trim(),
         birth_date: null,
         email: null,
-        status: editingPlayer?.status ?? 'ATIVO',
+        status: String(form.get('status') || 'ATIVO') as Player['status'],
+        suspension_reason: String(form.get('suspension_reason') || '').trim() || null,
+        suspended_until: String(form.get('suspended_until') || '') || null,
         type: form.get('mensalista') === 'on' ? 'MENSALISTA' : 'AVULSO',
         technical_score: Number(form.get('technical_score')),
         primary_position: String(form.get('primary_position')) as Position,
@@ -166,8 +170,8 @@ export function PlayersPage() {
         <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <RosterStat icon={<Users size={18} />} label="Total no elenco" value={roster.length} />
           <RosterStat icon={<BadgeCheck size={18} />} label="Ativos" value={activeCount} />
-          <RosterStat icon={<ShieldCheck size={18} />} label="Defesa/Goleiro" value={goalkeepers} />
-          <RosterStat icon={<Goal size={18} />} label="Linha/Quadra" value={linePlayers} />
+          <RosterStat icon={<ShieldCheck size={18} />} label="Goleiros" value={goalkeepers} />
+          <RosterStat icon={<Goal size={18} />} label="Suspensos" value={suspendedCount} />
         </div>
       </section>
 
@@ -221,7 +225,7 @@ export function PlayersPage() {
                       </div>
                     </td>
                     <td className="p-4 font-semibold">{displayPosition(player.primary_position)}</td>
-                    <td className="p-4"><StatusPill active={player.status === 'ATIVO'} /></td>
+                    <td className="p-4"><StatusPill status={player.status} /></td>
                     <td className="p-4 text-muted-foreground">{player.whatsapp || '-'}</td>
                     <td className="p-4">
                       <div className="flex justify-end gap-2">
@@ -287,7 +291,8 @@ export function PlayersPage() {
             <div className="mt-4 grid gap-3">
               <CompositionRow label="Mensalistas" value={mensalistas} total={Math.max(roster.length, 1)} />
               <CompositionRow label="Avulsos" value={roster.length - mensalistas} total={Math.max(roster.length, 1)} />
-              <CompositionRow label="Defesa/Goleiro" value={goalkeepers} total={Math.max(roster.length, 1)} />
+              <CompositionRow label="Goleiros" value={goalkeepers} total={Math.max(roster.length, 1)} />
+              <CompositionRow label="Linha" value={linePlayers} total={Math.max(roster.length, 1)} />
             </div>
           </Card>
 
@@ -306,16 +311,29 @@ export function PlayersPage() {
       {formOpen && (
         <PlayerModal title={editingPlayer ? 'Editar participante' : 'Novo participante'} onClose={closeForm}>
           <form className="grid gap-4" onSubmit={submit}>
+            {(() => {
+              const nameParts = getNameParts(editingPlayer)
+              return (
             <div className="grid gap-3 md:grid-cols-2">
-              <Field label="Nome"><Input name="name" required defaultValue={editingPlayer?.name ?? ''} /></Field>
+              <Field label="Nome"><Input name="first_name" required minLength={2} defaultValue={nameParts.firstName} /></Field>
+              <Field label="Sobrenome"><Input name="last_name" required minLength={2} defaultValue={nameParts.lastName} /></Field>
               <Field label="WhatsApp"><Input name="whatsapp" required defaultValue={editingPlayer?.whatsapp ?? ''} /></Field>
               <Field label="Nota"><Input name="technical_score" type="number" min={1} max={10} defaultValue={editingPlayer?.technical_score ?? 5} /></Field>
               <Field label="Posicao">
-                <Select name="primary_position" defaultValue={editingPlayer?.primary_position ?? 'Meio Campo'}>
+                <Select name="primary_position" defaultValue={editingPlayer?.primary_position === 'Goleiro' ? 'Goleiro' : 'Linha'}>
                   {positions.map((item) => <option key={item} value={item}>{displayPosition(item)}</option>)}
                 </Select>
               </Field>
+              <Field label="Status">
+                <Select name="status" defaultValue={editingPlayer?.status ?? 'ATIVO'}>
+                  <option value="ATIVO">Ativo</option>
+                  <option value="INATIVO">Inativo</option>
+                  <option value="SUSPENSO">Suspenso</option>
+                </Select>
+              </Field>
             </div>
+              )
+            })()}
 
             <label className="flex min-h-11 items-center gap-3 rounded-md border border-border bg-white px-3 text-sm font-semibold text-slate-700 dark:bg-slate-900 dark:text-slate-200">
               <input name="mensalista" type="checkbox" defaultChecked={editingPlayer?.type === 'MENSALISTA'} className="size-4 accent-green-700" />
@@ -323,6 +341,10 @@ export function PlayersPage() {
             </label>
 
             <Field label="Observacoes"><Textarea name="notes" defaultValue={editingPlayer?.notes ?? ''} /></Field>
+            <div className="grid gap-3 md:grid-cols-2">
+              <Field label="Motivo da suspensao"><Input name="suspension_reason" defaultValue={editingPlayer?.suspension_reason ?? ''} placeholder="Obrigatorio apenas se suspenso" /></Field>
+              <Field label="Suspenso ate"><Input name="suspended_until" type="date" defaultValue={editingPlayer?.suspended_until ?? ''} /></Field>
+            </div>
             {feedback && <p className="rounded-md bg-muted px-3 py-2 text-sm text-slate-700 dark:text-slate-200">{feedback}</p>}
             <div className="sticky bottom-0 z-10 -mx-5 -mb-5 flex flex-wrap justify-end gap-2 border-t border-border bg-white/95 p-5 backdrop-blur dark:bg-slate-950/95">
               <Button type="button" variant="ghost" onClick={closeForm}>
@@ -404,7 +426,16 @@ function RegistrationInviteCard({
 }
 
 function displayPosition(position: Position) {
-  return position === 'Goleiro' ? 'Defesa/Goleiro' : 'Linha/Quadra'
+  return position === 'Goleiro' ? 'Goleiro' : 'Linha'
+}
+
+function getNameParts(player: Player | null) {
+  if (!player) return { firstName: '', lastName: '' }
+  const firstName = player.first_name?.trim()
+  const lastName = player.last_name?.trim()
+  if (firstName || lastName) return { firstName: firstName ?? '', lastName: lastName ?? '' }
+  const [first = '', ...rest] = player.name.split(' ').filter(Boolean)
+  return { firstName: first, lastName: rest.join(' ') }
 }
 
 function RosterStat({ icon, label, value }: { icon: React.ReactNode; label: string; value: number }) {
@@ -437,12 +468,13 @@ function TypePill({ type }: { type: Player['type'] }) {
   )
 }
 
-function StatusPill({ active }: { active: boolean }) {
-  return (
-    <span className={cn('rounded-full px-3 py-1 text-xs font-black', active ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-100' : 'bg-zinc-200 text-zinc-800 dark:bg-zinc-800 dark:text-zinc-100')}>
-      {active ? 'ATIVO' : 'INATIVO'}
-    </span>
-  )
+function StatusPill({ status }: { status: Player['status'] }) {
+  const styles = {
+    ATIVO: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-100',
+    INATIVO: 'bg-zinc-200 text-zinc-800 dark:bg-zinc-800 dark:text-zinc-100',
+    SUSPENSO: 'bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-100',
+  }
+  return <span className={cn('rounded-full px-3 py-1 text-xs font-black', styles[status])}>{status}</span>
 }
 
 function PlayerMobileCard({ player, deleting, onDelete, onEdit }: { player: Player; deleting: boolean; onDelete: () => void; onEdit: () => void }) {
@@ -454,7 +486,7 @@ function PlayerMobileCard({ player, deleting, onDelete, onEdit }: { player: Play
           <p className="truncate font-black">{player.name}</p>
           <p className="text-sm text-muted-foreground">{displayPosition(player.primary_position)} - {player.technical_score}/10</p>
         </div>
-        <StatusPill active={player.status === 'ATIVO'} />
+        <StatusPill status={player.status} />
       </div>
       <div className="mt-4 flex flex-wrap gap-2">
         <TypePill type={player.type} />

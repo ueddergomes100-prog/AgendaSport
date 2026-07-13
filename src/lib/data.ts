@@ -130,7 +130,17 @@ export async function upsertAttendance(matchId: string, playerId: string, status
     p_match_id: matchId,
     p_player_id: playerId,
     p_status: status,
+    p_source: 'MANUAL',
   })
+  if (error && error.message.includes('Could not find the function')) {
+    const { error: legacyError } = await supabase.rpc('set_attendance_response', {
+      p_match_id: matchId,
+      p_player_id: playerId,
+      p_status: status,
+    })
+    if (legacyError) throw legacyError
+    return
+  }
   if (error) throw error
 }
 
@@ -178,13 +188,60 @@ export async function invitePlayersToMatch(matchId: string, playerIds: string[])
 
 export async function createPlayer(input: Partial<Player>) {
   const profile = await requireTenantProfile()
-  const { error } = await supabase.from('players').insert({ ...input, tenant_id: profile.tenant_id })
+  const tenantId = profile.tenant_id!
+  const payload = await preparePlayerPayload(input, tenantId)
+  const { error } = await supabase.from('players').insert({ ...payload, tenant_id: tenantId })
   if (error) throw error
 }
 
 export async function updatePlayer(id: string, input: Partial<Player>) {
-  const { error } = await supabase.from('players').update(input).eq('id', id)
+  const profile = await requireTenantProfile()
+  const tenantId = profile.tenant_id!
+  const payload = await preparePlayerPayload(input, tenantId, id)
+  const { error } = await supabase.from('players').update(payload).eq('id', id)
   if (error) throw error
+}
+
+async function preparePlayerPayload(input: Partial<Player>, tenantId: string, currentPlayerId?: string) {
+  const firstName = (input.first_name ?? '').trim()
+  const lastName = (input.last_name ?? '').trim()
+  if (firstName.length < 2) throw new Error('Informe o nome do participante.')
+  if (lastName.length < 2) throw new Error('Informe o sobrenome do participante.')
+
+  const whatsapp = (input.whatsapp ?? '').trim()
+  const normalized = normalizeWhatsApp(whatsapp)
+  if (!normalized) throw new Error('Informe um WhatsApp valido com DDD.')
+  await assertUniquePlayerPhone(tenantId, normalized, currentPlayerId)
+
+  const status = input.status ?? 'ATIVO'
+  return {
+    ...input,
+    first_name: firstName,
+    last_name: lastName,
+    name: `${firstName} ${lastName}`.trim(),
+    whatsapp,
+    whatsapp_normalized: normalized,
+    primary_position: input.primary_position === 'Goleiro' ? 'Goleiro' : 'Linha',
+    status,
+    suspended_at: status === 'SUSPENSO' ? (input.suspended_at ?? new Date().toISOString()) : null,
+    suspension_reason: status === 'SUSPENSO' ? (input.suspension_reason ?? input.notes ?? null) : null,
+    suspended_until: status === 'SUSPENSO' ? (input.suspended_until ?? null) : null,
+  }
+}
+
+async function assertUniquePlayerPhone(tenantId: string, normalized: string, currentPlayerId?: string) {
+  const { data, error } = await supabase
+    .from('players')
+    .select('id, whatsapp, whatsapp_normalized')
+    .eq('tenant_id', tenantId)
+  if (error) throw error
+
+  const duplicate = (data ?? []).find((player) => {
+    if (player.id === currentPlayerId) return false
+    return (player.whatsapp_normalized || normalizeWhatsApp(player.whatsapp ?? '')) === normalized
+  })
+
+  if (duplicate) throw new Error('Este WhatsApp ja esta cadastrado nesta empresa.')
 }
 
 export async function deletePlayer(id: string) {
@@ -329,15 +386,21 @@ export async function getPublicRegistrationCompany(token: string): Promise<Pick<
   return data
 }
 
-export async function publicRegisterPlayer(input: { token: string; name: string; whatsapp: string; kind: 'GOLEIRO' | 'LINHA' }) {
-  const { data, error } = await supabase.rpc('public_register_player', {
-    p_token: input.token,
-    p_name: input.name,
-    p_whatsapp: input.whatsapp,
-    p_position_kind: input.kind,
+export async function publicRegisterPlayer(input: { token: string; firstName: string; lastName: string; whatsapp: string; kind: 'GOLEIRO' | 'LINHA' }) {
+  const response = await fetch(apiUrl(`/api/public-registration/${input.token}/players`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      first_name: input.firstName,
+      last_name: input.lastName,
+      whatsapp: input.whatsapp,
+      position_kind: input.kind,
+    }),
   })
-  if (error) throw error
-  return data
+
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(payload.error ?? 'Nao foi possivel concluir sua inscricao.')
+  return payload
 }
 
 export async function createCompanyAdminUser(input: { companyId: string; fullName: string; email: string; password: string; role: 'ADMINISTRADOR' | 'ORGANIZADOR' | 'OPERADOR' }) {
@@ -386,4 +449,12 @@ export async function sendMatchConfirmations(matchId: string): Promise<{
   const payload = await response.json().catch(() => ({}))
   if (!response.ok) throw new Error(payload.error ?? 'Nao foi possivel enviar a convocacao pelo WhatsApp.')
   return payload
+}
+
+export function normalizeWhatsApp(value: string) {
+  const digits = value.replace(/\D/g, '')
+  if (digits.length < 10) return ''
+  const local = digits.startsWith('55') ? digits.slice(2) : digits
+  if (local.length === 11 && local[2] === '9') return `${local.slice(0, 2)}${local.slice(3)}`
+  return local
 }

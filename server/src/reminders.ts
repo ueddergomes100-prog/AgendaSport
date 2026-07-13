@@ -303,6 +303,11 @@ export async function runConfirmationReminderJob(options: { tenantId?: string | 
       const alreadySent = await getAlreadySentPlayerIds(match.id, stage.template)
 
       for (const attendance of pendingAttendance) {
+        if (attendance.player?.status !== 'ATIVO') {
+          summary.skippedWithoutWhatsapp += 1
+          continue
+        }
+
         if (alreadySent.has(attendance.player_id)) {
           summary.skippedAlreadySent += 1
           continue
@@ -376,6 +381,11 @@ export async function sendConfirmationForMatch(matchId: string, tenantId?: strin
   const pendingAttendance = await getPendingAttendance(match.id)
 
   for (const attendance of pendingAttendance) {
+    if (attendance.player?.status !== 'ATIVO') {
+      summary.skippedWithoutWhatsapp += 1
+      continue
+    }
+
     const phone = attendance.player?.whatsapp?.replace(/\D/g, '')
     if (!phone) {
       summary.skippedWithoutWhatsapp += 1

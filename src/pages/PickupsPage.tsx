@@ -5,7 +5,7 @@ import { Button } from '../components/ui/button'
 import { Card } from '../components/ui/card'
 import { Field, Input, Select } from '../components/ui/field'
 import { AnimatedPage, PremiumModal } from '../components/ui/sport'
-import { createMatches, createPickup, deletePickup, getPickups, updatePickup } from '../lib/data'
+import { createMatch, createPickup, deletePickup, getPickups, updatePickup } from '../lib/data'
 import { getErrorMessage, money } from '../lib/utils'
 import type { Pickup } from '../lib/types'
 
@@ -24,7 +24,7 @@ export function PickupsPage() {
   const modalOpen = formOpen || Boolean(pickupToDelete)
 
   const list = useMemo(() => pickups.data ?? [], [pickups.data])
-  const totalCapacity = list.reduce((sum, pickup) => sum + Number(pickup.max_players ?? 0), 0)
+  const totalCapacity = list.reduce((sum, pickup) => sum + pickupCapacity(pickup), 0)
   const averageCasualPrice = useMemo(() => {
     if (!list.length) return 0
     return list.reduce((sum, pickup) => sum + Number(pickup.casual_price ?? 0), 0) / list.length
@@ -65,17 +65,24 @@ export function PickupsPage() {
         setFeedback('Evento atualizado com sucesso.')
       } else {
         const pickup = await createPickup(payload)
-        const recurrenceMonths = Number(form.get('schedule_months') || 1)
-        const scheduledDates = recurrenceMonths > 0 ? buildWeeklySchedule(getNextPickupDateObject(pickup.weekday, pickup.start_time), recurrenceMonths) : []
-        if (scheduledDates.length) {
-          await createMatches(scheduledDates.map((scheduledAt) => ({
+        const recurrenceMonths = Number(form.get('schedule_months') || 0)
+        const scheduledAt = getNextPickupDateObject(pickup.weekday, pickup.start_time)
+        const recurrenceUntil = recurrenceMonths > 0 ? addMonthsDate(scheduledAt, recurrenceMonths) : null
+        if (recurrenceMonths > 0 && recurrenceUntil) {
+          await createMatch({
             pickup_id: pickup.id,
             scheduled_at: scheduledAt.toISOString(),
             status: 'AGENDADA',
             notes: `Agenda automatica: ${pickup.name}`,
-          })))
+            max_line_players: pickup.max_line_players ?? pickup.max_players,
+            max_goalkeepers: pickup.max_goalkeepers ?? 0,
+            recurrence_until: toDateOnly(recurrenceUntil),
+            recurrence_weekday: pickup.weekday,
+            recurrence_start_time: pickup.start_time,
+            recurrence_months: recurrenceMonths,
+          })
         }
-        setFeedback(scheduledDates.length ? `Evento cadastrado e ${scheduledDates.length} datas agendadas.` : 'Evento cadastrado com sucesso.')
+        setFeedback(recurrenceMonths > 0 ? 'Evento cadastrado e proxima data agendada. As demais serao criadas ao finalizar cada evento.' : 'Evento cadastrado com sucesso.')
       }
 
       await pickups.refetch()
@@ -183,7 +190,8 @@ export function PickupsPage() {
               <Field label="Horario"><Input name="start_time" type="time" required defaultValue={formatTimeInput(editingPickup?.start_time)} /></Field>
               <Field label="Valor avulso"><Input name="casual_price" type="number" min={0} defaultValue={editingPickup?.casual_price ?? 0} /></Field>
               <Field label="Valor mensalista"><Input name="monthly_price" type="number" min={0} defaultValue={editingPickup?.monthly_price ?? 0} /></Field>
-              <Field label="Maximo de participantes"><Input name="max_players" type="number" min={1} required defaultValue={editingPickup?.max_players ?? ''} /></Field>
+              <Field label="Maximo jogadores de linha"><Input name="max_line_players" type="number" min={0} required defaultValue={editingPickup?.max_line_players ?? editingPickup?.max_players ?? ''} /></Field>
+              <Field label="Maximo goleiros"><Input name="max_goalkeepers" type="number" min={0} required defaultValue={editingPickup?.max_goalkeepers ?? 0} /></Field>
               <Field label="Horas exclusivas mensalistas"><Input name="mensalista_priority_hours" type="number" min={0} defaultValue={editingPickup?.mensalista_priority_hours ?? 48} /></Field>
             </div>
 
@@ -191,10 +199,11 @@ export function PickupsPage() {
               <Field label="Agenda automatica semanal">
                 <Select name="schedule_months" defaultValue="1">
                   <option value="0">Nao agendar agora</option>
-                  <option value="1">Agendar toda semana por 1 mes</option>
-                  <option value="2">Agendar toda semana por 2 meses</option>
-                  <option value="3">Agendar toda semana por 3 meses</option>
+                  <option value="1">Criar proxima data e seguir por 1 mes</option>
+                  <option value="2">Criar proxima data e seguir por 2 meses</option>
+                  <option value="3">Criar proxima data e seguir por 3 meses</option>
                 </Select>
+                <p className="mt-2 text-xs font-semibold text-muted-foreground">O sistema cria somente o proximo evento. Ao finalizar, pergunta se deve criar a proxima semana.</p>
               </Field>
             )}
 
@@ -236,6 +245,8 @@ async function invalidateGameFlow(queryClient: ReturnType<typeof useQueryClient>
 }
 
 function readPickupForm(form: FormData): Partial<Pickup> {
+  const maxLinePlayers = Number(form.get('max_line_players') || 0)
+  const maxGoalkeepers = Number(form.get('max_goalkeepers') || 0)
   return {
     name: String(form.get('name')).trim(),
     place: String(form.get('place')).trim(),
@@ -245,7 +256,9 @@ function readPickupForm(form: FormData): Partial<Pickup> {
     start_time: String(form.get('start_time')),
     casual_price: Number(form.get('casual_price') || 0),
     monthly_price: Number(form.get('monthly_price') || 0),
-    max_players: Number(form.get('max_players')),
+    max_players: maxLinePlayers + maxGoalkeepers,
+    max_line_players: maxLinePlayers,
+    max_goalkeepers: maxGoalkeepers,
     mensalista_priority_hours: Number(form.get('mensalista_priority_hours') || 0),
   }
 }
@@ -260,16 +273,18 @@ function getNextPickupDateObject(weekday: number, startTime: string, from = new 
   return date
 }
 
-function buildWeeklySchedule(firstDate: Date, months: number) {
-  const end = new Date(firstDate)
-  end.setMonth(end.getMonth() + months)
-  const dates: Date[] = []
-  const current = new Date(firstDate)
-  while (current <= end) {
-    dates.push(new Date(current))
-    current.setDate(current.getDate() + 7)
-  }
-  return dates
+function addMonthsDate(date: Date, months: number) {
+  const next = new Date(date)
+  next.setMonth(next.getMonth() + months)
+  return next
+}
+
+function toDateOnly(date: Date) {
+  return date.toISOString().slice(0, 10)
+}
+
+function pickupCapacity(pickup: Pickup) {
+  return Number(pickup.max_line_players ?? pickup.max_players ?? 0) + Number(pickup.max_goalkeepers ?? 0)
 }
 
 function formatTimeInput(value?: string | null) {
@@ -305,10 +320,10 @@ function PickupCard({ pickup, deleting, onDelete, onEdit }: { pickup: Pickup; de
         </div>
       </div>
       <div className="grid gap-3 p-5 sm:grid-cols-2 xl:grid-cols-4">
-        <Info label="Capacidade" value={`${pickup.max_players} participantes`} />
+        <Info label="Linha" value={`${pickup.max_line_players ?? pickup.max_players} vagas`} />
+        <Info label="Goleiros" value={`${pickup.max_goalkeepers ?? 0} vagas`} />
         <Info label="Avulso" value={money(pickup.casual_price)} />
         <Info label="Mensalista" value={money(pickup.monthly_price)} />
-        <Info label="Prioridade" value={`${pickup.mensalista_priority_hours}h`} />
       </div>
       {(pickup.address || pickup.maps_url) && (
         <div className="border-t border-border px-5 py-4">

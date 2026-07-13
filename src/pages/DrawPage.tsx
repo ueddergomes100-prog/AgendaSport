@@ -117,7 +117,7 @@ export function DrawPage() {
 
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <DrawStat icon={<Users size={18} />} label="Confirmados" value={confirmedPlayers.length} />
-        <DrawStat icon={<ShieldCheck size={18} />} label="Defesa/Goleiro" value={goalkeepers} />
+        <DrawStat icon={<ShieldCheck size={18} />} label="Goleiros" value={goalkeepers} />
         <DrawStat icon={<Trophy size={18} />} label="Equipes" value={teamCount} />
         <DrawStat icon={<Goal size={18} />} label="Equilibrio" value={percent(draw?.percentageDiff)} />
       </section>
@@ -245,5 +245,5 @@ function ReserveCard({ players }: { players: TeamDrawPlayer[] }) {
 }
 
 function displayPosition(position: TeamDrawPlayer['primary_position']) {
-  return position === 'Goleiro' ? 'Defesa/Goleiro' : 'Linha/Quadra'
+  return position === 'Goleiro' ? 'Goleiro' : 'Linha'
 }

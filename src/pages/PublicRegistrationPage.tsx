@@ -23,13 +23,16 @@ export function PublicRegistrationPage() {
     setFeedback('')
     try {
       const form = new FormData(formElement)
+      const firstName = String(form.get('first_name')).trim()
+      const lastName = String(form.get('last_name')).trim()
       await publicRegisterPlayer({
         token,
-        name: String(form.get('name')),
+        firstName,
+        lastName,
         whatsapp: String(form.get('whatsapp')),
         kind: String(form.get('kind')) as 'GOLEIRO' | 'LINHA',
       })
-      setRegisteredName(String(form.get('name')).trim())
+      setRegisteredName(`${firstName} ${lastName}`.trim())
       formElement.reset()
       setFeedback('')
     } catch (error) {
@@ -75,7 +78,7 @@ export function PublicRegistrationPage() {
             </div>
             <div>
               <h2 className="text-xl font-black">Minha inscricao</h2>
-              <p className="text-sm text-slate-500">Nome, WhatsApp e funcao no jogo.</p>
+              <p className="text-sm text-slate-500">Nome, sobrenome, WhatsApp e funcao.</p>
             </div>
           </div>
 
@@ -113,16 +116,21 @@ export function PublicRegistrationPage() {
 
           {company.data && !unavailable && !registeredName && (
             <form className="grid gap-4" onSubmit={submit}>
-              <Field label="Nome">
-                <Input name="name" required placeholder="Seu nome" />
-              </Field>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="Nome">
+                  <Input name="first_name" required minLength={2} placeholder="Seu nome" />
+                </Field>
+                <Field label="Sobrenome">
+                  <Input name="last_name" required minLength={2} placeholder="Seu sobrenome" />
+                </Field>
+              </div>
               <Field label="WhatsApp">
                 <Input name="whatsapp" required placeholder="DDD + numero" />
               </Field>
               <Field label="Funcao no jogo">
                 <Select name="kind" required>
-                  <option value="LINHA">Participante de linha/quadra</option>
-                  <option value="GOLEIRO">Defesa/Goleiro</option>
+                  <option value="LINHA">Linha</option>
+                  <option value="GOLEIRO">Goleiro</option>
                 </Select>
               </Field>
               {feedback && <p className="rounded-md bg-muted px-3 py-2 text-sm text-slate-700">{feedback}</p>}
