@@ -1088,6 +1088,7 @@ tbody tr:hover {
 
   aside,
   header,
+  .mobile-dock,
   .no-print {
     display: none !important;
   }
