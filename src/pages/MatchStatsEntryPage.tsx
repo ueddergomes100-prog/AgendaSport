@@ -40,6 +40,7 @@ export function MatchStatsEntryPage() {
   const selectedMatch = useMemo(() => (matches.data ?? []).find((match) => match.id === matchId) ?? null, [matches.data, matchId])
   const selectedPickup = useMemo(() => (pickups.data ?? []).find((pickup) => pickup.id === selectedMatch?.pickup_id) ?? null, [pickups.data, selectedMatch])
   const statsByPlayerId = useMemo(() => new Map((matchStats.data ?? []).map((row) => [row.player_id, row] as const)), [matchStats.data])
+  const drawTeams = useMemo(() => latestTeamDraw.data?.payload?.teams ?? [], [latestTeamDraw.data])
   const rows = useMemo(
     () => (attendance.data ?? [])
       .filter((row) => ['CONFIRMADO', 'COMPARECEU', 'FALTOU'].includes(row.status) && row.player)
@@ -74,6 +75,34 @@ export function MatchStatsEntryPage() {
       draws: 0,
       losses: 0,
     }
+  }
+
+  function buildTeamResultsFromForm(form: HTMLFormElement | null) {
+    return drawTeams.map((team) => ({
+      id: team.id,
+      name: team.name,
+      score: Number(form?.querySelector<HTMLInputElement>(`[name="team-score-${team.id}"]`)?.value || 0),
+      playerIds: team.players.map((player) => player.id),
+    }))
+  }
+
+  function applyTeamResultsToRows<T extends { playerId: string; present: boolean; wins?: number; draws?: number; losses?: number }>(statRows: T[], teamResults: ReturnType<typeof buildTeamResultsFromForm>) {
+    if (!teamResults.length) return statRows.map((row) => ({ ...row, wins: 0, draws: 0, losses: 0 }))
+
+    const highestScore = Math.max(...teamResults.map((team) => team.score))
+    const winnerCount = teamResults.filter((team) => team.score === highestScore).length
+
+    return statRows.map((row) => {
+      const team = teamResults.find((teamResult) => teamResult.playerIds.includes(row.playerId))
+      if (!row.present || !team) return { ...row, wins: 0, draws: 0, losses: 0 }
+      if (winnerCount !== 1) return { ...row, wins: 0, draws: 1, losses: 0 }
+      return {
+        ...row,
+        wins: team.score === highestScore ? 1 : 0,
+        draws: 0,
+        losses: team.score === highestScore ? 0 : 1,
+      }
+    })
   }
 
   async function savePartialRow(item: Attendance, override: Partial<{ present: boolean; goals: number; assists: number }> = {}) {
@@ -121,7 +150,8 @@ export function MatchStatsEntryPage() {
     if (!selectedMatch || !formRef.current) return
 
     const form = new FormData(formRef.current)
-    const statRows = rows.map((item) => ({
+    const teamResults = buildTeamResultsFromForm(formRef.current)
+    const statRows = applyTeamResultsToRows(rows.map((item) => ({
       playerId: item.player_id,
       present: form.get(`present-${item.player_id}`) === 'on',
       goals: Number(form.get(`goals-${item.player_id}`) || 0),
@@ -129,7 +159,7 @@ export function MatchStatsEntryPage() {
       wins: 0,
       draws: 0,
       losses: 0,
-    }))
+    })), teamResults)
 
     setSaving(true)
     setFeedback('')
@@ -140,12 +170,7 @@ export function MatchStatsEntryPage() {
         {
           team_a_score: null,
           team_b_score: null,
-          team_results: latestTeamDraw.data?.payload?.teams?.map((team) => ({
-            id: team.id,
-            name: team.name,
-            score: 0,
-            playerIds: team.players.map((player) => player.id),
-          })) ?? [],
+          team_results: teamResults,
           status: 'ENCERRADA',
         },
         statRows,
@@ -259,6 +284,28 @@ export function MatchStatsEntryPage() {
         )}
 
         <form ref={formRef} key={`${matchId}-${matchStats.dataUpdatedAt}`} className="mt-4 grid gap-4" onSubmit={submit}>
+          {drawTeams.length > 0 && (
+            <div className="rounded-xl border border-green-200 bg-green-50/70 p-3 dark:border-green-900/50 dark:bg-green-950/20 sm:p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="font-black text-green-950 dark:text-green-100">Resultado das equipes</h3>
+                  <p className="mt-1 text-sm text-green-900/70 dark:text-green-100/70">Informe o placar antes de finalizar para calcular vitorias, empates e derrotas.</p>
+                </div>
+                <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-green-900 shadow-sm dark:bg-slate-950 dark:text-green-100">{drawTeams.length} equipes</span>
+              </div>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                {drawTeams.map((team) => (
+                  <NumberStepper
+                    key={team.id}
+                    name={`team-score-${team.id}`}
+                    label={team.name}
+                    defaultValue={selectedMatch.team_results?.find((result) => result.id === team.id)?.score ?? 0}
+                    disabled={!canLaunchStats || saving}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
           <div className="grid gap-3">
             {rows.map((item) => {
               const saved = statsByPlayerId.get(item.player_id)

@@ -113,8 +113,8 @@ export function StatsPage() {
               <option value="all">Historico geral</option>
             </Select>
             <Select value={primaryStat.preference} onChange={(event) => primaryStat.setPreference(event.target.value as PrimaryStatLabel)}>
-              <option value="PONTOS">Nomenclatura: Pontos</option>
               <option value="GOLS">Nomenclatura: Gols</option>
+              <option value="PONTOS">Nomenclatura: Pontos</option>
             </Select>
             <Button type="button" variant="secondary" onClick={() => window.print()}>
               <Download size={16} />

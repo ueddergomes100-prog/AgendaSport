@@ -10,11 +10,13 @@ const labels: Record<PrimaryStatLabel, { singular: string; plural: string; short
 }
 
 export function normalizePrimaryStatLabel(value?: string | null): PrimaryStatLabel {
-  return String(value ?? '').trim().toUpperCase() === 'GOLS' ? 'GOLS' : 'PONTOS'
+  const normalized = String(value ?? '').trim().toUpperCase()
+  if (!normalized) return 'GOLS'
+  return normalized === 'PONTOS' ? 'PONTOS' : 'GOLS'
 }
 
 export function getPrimaryStatPreference(): PrimaryStatLabel {
-  if (typeof window === 'undefined') return 'PONTOS'
+  if (typeof window === 'undefined') return 'GOLS'
   return normalizePrimaryStatLabel(window.localStorage.getItem(STORAGE_KEY))
 }
 

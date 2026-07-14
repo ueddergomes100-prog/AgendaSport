@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Goal, LoaderCircle, RefreshCcw, Save, ShieldCheck, Sparkles, Trophy, Users } from 'lucide-react'
+import { Copy, Goal, LoaderCircle, MessageCircle, RefreshCcw, Save, ShieldCheck, Sparkles, Trophy, Users } from 'lucide-react'
 import { Button } from '../components/ui/button'
 import { Card, CardTitle } from '../components/ui/card'
 import { Field, Input, Select } from '../components/ui/field'
@@ -62,6 +62,17 @@ export function DrawPage() {
     } finally {
       setSaving(false)
     }
+  }
+
+  async function copyDrawMessage() {
+    if (!draw) return
+    await copyText(buildDrawMessage(draw, selectedMatch))
+    setFeedback('Lista do sorteio copiada para enviar no WhatsApp.')
+  }
+
+  function openDrawWhatsApp() {
+    if (!draw) return
+    window.open(`https://wa.me/?text=${encodeURIComponent(buildDrawMessage(draw, selectedMatch))}`, '_blank', 'noopener,noreferrer')
   }
 
   return (
@@ -140,6 +151,14 @@ export function DrawPage() {
               <Button type="button" variant="secondary" disabled={!confirmedPlayers.length} onClick={makeDraw}>
                 <RefreshCcw size={16} />
                 Refazer
+              </Button>
+              <Button type="button" variant="secondary" disabled={!draw} onClick={copyDrawMessage}>
+                <Copy size={16} />
+                Copiar
+              </Button>
+              <Button type="button" variant="secondary" disabled={!draw} onClick={openDrawWhatsApp}>
+                <MessageCircle size={16} />
+                WhatsApp
               </Button>
               <Button type="button" disabled={!draw || saving} onClick={persistDraw}>
                 {saving ? <LoaderCircle className="animate-spin" size={16} /> : <Save size={16} />}
@@ -246,4 +265,37 @@ function ReserveCard({ players }: { players: TeamDrawPlayer[] }) {
       </div>
     </Card>
   )
+}
+
+function buildDrawMessage(draw: TeamDraw, match: { scheduled_at: string; notes: string | null } | null) {
+  const lines = [
+    'Agenda Sport - SORTEIO DAS EQUIPES',
+    match ? `Evento: ${match.notes?.trim() || new Date(match.scheduled_at).toLocaleString('pt-BR')}` : null,
+    match ? `Data: ${new Date(match.scheduled_at).toLocaleString('pt-BR')}` : null,
+    '',
+    ...draw.teams.flatMap((team) => [
+      `${team.name} (${team.players.length} participantes | nota ${team.score})`,
+      ...team.players.map((player, index) => `${index + 1}. ${player.name} - ${displayPosition(player.primary_position)} - nota ${player.technical_score}`),
+      '',
+    ]),
+    draw.unassigned.length ? 'Reservas:' : null,
+    ...draw.unassigned.map((player, index) => `${index + 1}. ${player.name} - ${displayPosition(player.primary_position)}`),
+  ]
+
+  return lines.filter(Boolean).join('\n')
+}
+
+async function copyText(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.select()
+  document.execCommand('copy')
+  textarea.remove()
 }

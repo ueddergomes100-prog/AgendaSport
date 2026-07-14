@@ -117,6 +117,7 @@ export function SchedulePage() {
     () => new Map((matchStats.data ?? []).map((row) => [row.player_id, row] as const)),
     [matchStats.data],
   )
+  const drawTeams = useMemo(() => latestTeamDraw.data?.payload?.teams ?? [], [latestTeamDraw.data])
   const presentCandidates = attendanceRows.filter((row) => ['CONFIRMADO', 'COMPARECEU', 'FALTOU'].includes(row.status) && row.player)
   const invitedPlayerIds = new Set(attendanceRows.map((row) => row.player_id))
   const counts = countAttendance(attendanceRows)
@@ -253,6 +254,34 @@ export function SchedulePage() {
     }
   }
 
+  function buildTeamResultsFromForm(form: HTMLFormElement | null) {
+    return drawTeams.map((team) => ({
+      id: team.id,
+      name: team.name,
+      score: Number(form?.querySelector<HTMLInputElement>(`[name="team-score-${team.id}"]`)?.value || 0),
+      playerIds: team.players.map((player) => player.id),
+    }))
+  }
+
+  function applyTeamResultsToRows<T extends { playerId: string; present: boolean; wins?: number; draws?: number; losses?: number }>(rows: T[], teamResults: ReturnType<typeof buildTeamResultsFromForm>) {
+    if (!teamResults.length) return rows.map((row) => ({ ...row, wins: 0, draws: 0, losses: 0 }))
+
+    const highestScore = Math.max(...teamResults.map((team) => team.score))
+    const winnerCount = teamResults.filter((team) => team.score === highestScore).length
+
+    return rows.map((row) => {
+      const team = teamResults.find((teamResult) => teamResult.playerIds.includes(row.playerId))
+      if (!row.present || !team) return { ...row, wins: 0, draws: 0, losses: 0 }
+      if (winnerCount !== 1) return { ...row, wins: 0, draws: 1, losses: 0 }
+      return {
+        ...row,
+        wins: team.score === highestScore ? 1 : 0,
+        draws: 0,
+        losses: team.score === highestScore ? 0 : 1,
+      }
+    })
+  }
+
   async function savePartialStatsRow(item: Attendance, override: Partial<{ present: boolean; goals: number; assists: number }> = {}) {
     if (!selectedMatch || !canLaunchStats) return
     const row = buildStatsRowFromForm(item, override)
@@ -297,7 +326,8 @@ export function SchedulePage() {
   async function finishMatch() {
     if (!selectedMatch || !statsFormRef.current) return
     const form = new FormData(statsFormRef.current)
-    const rows = presentCandidates.map((item) => {
+    const teamResults = buildTeamResultsFromForm(statsFormRef.current)
+    const rows = applyTeamResultsToRows(presentCandidates.map((item) => {
       const present = form.get(`present-${item.player_id}`) === 'on'
 
       return {
@@ -309,7 +339,7 @@ export function SchedulePage() {
         draws: 0,
         losses: 0,
       }
-    })
+    }), teamResults)
 
     setSavingStats(true)
     setFeedback('')
@@ -320,12 +350,7 @@ export function SchedulePage() {
         {
           team_a_score: null,
           team_b_score: null,
-          team_results: latestTeamDraw.data?.payload?.teams?.map((team) => ({
-            id: team.id,
-            name: team.name,
-            score: 0,
-            playerIds: team.players.map((player) => player.id),
-          })) ?? [],
+          team_results: teamResults,
           status: 'ENCERRADA',
         },
         rows,
@@ -565,6 +590,28 @@ export function SchedulePage() {
                 )}
 
                 <form ref={statsFormRef} key={`${effectiveSelectedMatchId}-${matchStats.dataUpdatedAt}`} className="mt-4 grid gap-4" onSubmit={closeMatch}>
+                  {drawTeams.length > 0 && (
+                    <div className="rounded-xl border border-green-200 bg-green-50/70 p-3 dark:border-green-900/50 dark:bg-green-950/20 sm:p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <h3 className="font-black text-green-950 dark:text-green-100">Resultado das equipes</h3>
+                          <p className="mt-1 text-sm text-green-900/70 dark:text-green-100/70">Informe o placar antes de finalizar para calcular vitorias, empates e derrotas.</p>
+                        </div>
+                        <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-green-900 shadow-sm dark:bg-slate-950 dark:text-green-100">{drawTeams.length} equipes</span>
+                      </div>
+                      <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                        {drawTeams.map((team) => (
+                          <NumberStepper
+                            key={team.id}
+                            name={`team-score-${team.id}`}
+                            label={team.name}
+                            defaultValue={selectedMatch.team_results?.find((result) => result.id === team.id)?.score ?? 0}
+                            disabled={!canLaunchStats || savingStats}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   <div className="grid gap-3">
                     {presentCandidates.map((item) => {
                       const saved = statsByPlayerId.get(item.player_id)
