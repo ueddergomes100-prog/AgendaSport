@@ -334,11 +334,6 @@ function getAttendanceStage(attendance: AttendanceRow) {
   return Math.max(1, Math.min(5, Math.trunc(parsed)))
 }
 
-function getStageForAttendance(schedules: ReminderStage[], attendance: AttendanceRow) {
-  const stageNumber = getAttendanceStage(attendance)
-  return schedules.find((stage) => stage.stageNumber === stageNumber) ?? schedules[0] ?? confirmationReminderStages[0]
-}
-
 function normalizePhone(value: string) {
   const digits = value.replace(/\D/g, '')
   return digits.startsWith('55') ? digits.slice(2) : digits
@@ -463,7 +458,6 @@ export async function runConfirmationReminderJob(options: { tenantId?: string | 
 
 export async function sendConfirmationForMatch(matchId: string, tenantId?: string | null): Promise<MatchConfirmationSummary> {
   const match = await getMatchForConfirmation(matchId, tenantId)
-  const template = `CONFIRMACAO_MANUAL_${Date.now()}`
   const summary: MatchConfirmationSummary = {
     matchId: match.id,
     invitationsCreated: 0,
@@ -472,6 +466,11 @@ export async function sendConfirmationForMatch(matchId: string, tenantId?: strin
     skippedWithoutWhatsapp: 0,
     errors: [],
   }
+  const now = new Date()
+  const schedules = await getConfirmationSchedules(match.tenant_id)
+  const dueStages = dueReminderStages(match, schedules, now)
+
+  if (!dueStages.length) return summary
 
   if (await openMatchIfScheduled(match)) {
     // The manual sender opens the event before delivering the approved template.
@@ -479,49 +478,62 @@ export async function sendConfirmationForMatch(matchId: string, tenantId?: strin
 
   summary.invitationsCreated = await ensureInvitations(match)
   const pendingAttendance = await getPendingAttendance(match.id)
-  const schedules = await getConfirmationSchedules(match.tenant_id)
 
-  for (const attendance of pendingAttendance) {
-    if (attendance.player?.status !== 'ATIVO') {
-      summary.skippedWithoutWhatsapp += 1
-      continue
-    }
+  for (const stage of dueStages) {
+    const alreadySent = await getAlreadySentPlayerIds(match.id, stage.template)
 
-    const phone = attendance.player?.whatsapp?.replace(/\D/g, '')
-    if (!phone) {
-      summary.skippedWithoutWhatsapp += 1
-      continue
-    }
+    for (const attendance of pendingAttendance) {
+      if (getAttendanceStage(attendance) !== stage.stageNumber) continue
 
-    try {
-      const stage = getStageForAttendance(schedules, attendance)
-      const message = buildConfirmationMessage(match, attendance, stage)
-      await sendWhatsAppMessage({
-        tenant_id: match.tenant_id,
-        match_id: match.id,
-        player_id: attendance.player_id,
-        phone,
-        type: 'CONFIRMACAO',
-        template,
-        message,
-        metadata: {
-          stage: stage.label,
-          stage_number: stage.stageNumber,
-          days_before: stage.daysBefore,
-          send_time: stage.sendTime,
-          manual_send: true,
-          scheduled_at: match.scheduled_at,
-          pickup_id: match.pickup_id,
-          template_parameters: buildConfirmationTemplateParameters(match, attendance),
-        },
-      })
-      summary.remindersSent += 1
-    } catch (sendError) {
-      summary.errors.push({
-        matchId: match.id,
-        playerId: attendance.player_id,
-        message: getErrorMessage(sendError, 'Falha ao enviar convocacao.'),
-      })
+      if (attendance.player?.status !== 'ATIVO') {
+        summary.skippedWithoutWhatsapp += 1
+        continue
+      }
+
+      if (alreadySent.has(attendance.player_id)) {
+        summary.skippedAlreadySent += 1
+        continue
+      }
+
+      const phone = attendance.player?.whatsapp?.replace(/\D/g, '')
+      if (!phone) {
+        summary.skippedWithoutWhatsapp += 1
+        continue
+      }
+
+      try {
+        const message = buildConfirmationMessage(match, attendance, stage)
+        if (await wasConfirmationAlreadySent(match, attendance, stage.template, message)) {
+          summary.skippedAlreadySent += 1
+          continue
+        }
+        await sendWhatsAppMessage({
+          tenant_id: match.tenant_id,
+          match_id: match.id,
+          player_id: attendance.player_id,
+          phone,
+          type: 'CONFIRMACAO',
+          template: stage.template,
+          message,
+          metadata: {
+            stage: stage.label,
+            stage_number: stage.stageNumber,
+            days_before: stage.daysBefore,
+            send_time: stage.sendTime,
+            manual_send: true,
+            scheduled_at: match.scheduled_at,
+            pickup_id: match.pickup_id,
+            template_parameters: buildConfirmationTemplateParameters(match, attendance),
+          },
+        })
+        summary.remindersSent += 1
+      } catch (sendError) {
+        summary.errors.push({
+          matchId: match.id,
+          playerId: attendance.player_id,
+          message: getErrorMessage(sendError, 'Falha ao enviar convocacao.'),
+        })
+      }
     }
   }
 
