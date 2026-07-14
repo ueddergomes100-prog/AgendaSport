@@ -10,6 +10,7 @@ import { getErrorMessage } from '../lib/utils'
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
 const appBaseUrl = (import.meta.env.VITE_APP_URL ?? '').replace(/\/$/, '')
+const productionAppUrl = 'https://agendasport.com.br'
 
 function apiUrl(path: string) {
   return `${apiBaseUrl}${path}`
@@ -30,7 +31,11 @@ export function LoginPage() {
     setMessage('')
     try {
       if (mode === 'recover') {
-        const redirectTo = `${appBaseUrl || window.location.origin}/redefinir-senha`
+        const currentOrigin = window.location.origin
+        const safeOrigin = currentOrigin.includes('localhost') || currentOrigin.includes('127.0.0.1')
+          ? productionAppUrl
+          : currentOrigin
+        const redirectTo = `${appBaseUrl || safeOrigin}/redefinir-senha`
         const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo })
         if (error) throw error
         setMessage('Enviamos o link de recuperacao para o email informado.')
