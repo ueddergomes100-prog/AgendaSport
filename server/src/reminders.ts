@@ -8,6 +8,7 @@ export const confirmationReminderStages = [
 ] as const
 
 const EVENT_TIME_ZONE = 'America/Sao_Paulo'
+const UNANSWERED_FOLLOW_UP_DELAY_MS = 60 * 60 * 1000
 
 type ReminderStage = {
   stageNumber: number
@@ -125,6 +126,26 @@ function buildConfirmationTemplateParameters(match: MatchRow, attendance: Attend
     formatDate(match.scheduled_at),
     formatTime(match.scheduled_at),
   ]
+}
+
+function buildUnansweredFollowUpMessage(match: MatchRow, attendance: AttendanceRow, stage: ReminderStage) {
+  const playerName = attendance.player?.name?.split(' ')[0] ?? 'participante'
+  const pickup = match.pickup
+  const lines = [
+    'Agenda Sport - lembrete de resposta',
+    stage.stageNumber === 1 ? 'Prioridade mensalistas' : stage.stageNumber === 2 ? 'Chamada geral' : stage.label,
+    '',
+    `Oi, ${playerName}! Ainda estamos aguardando sua resposta para ${pickup?.name ?? match.notes ?? 'o evento'}.`,
+    `Data: ${formatDateTime(match.scheduled_at)}`,
+    '',
+    'Responda com SIM, NAO ou ESPERA para o organizador fechar a lista.',
+  ]
+
+  return lines.join('\n')
+}
+
+function getUnansweredFollowUpTemplate(stage: ReminderStage) {
+  return `${stage.template}_LEMBRETE_1H`
 }
 
 async function ensureInvitations(match: MatchRow) {
@@ -277,6 +298,21 @@ async function getAlreadySentPlayerIds(matchId: string, template: string) {
   return new Set((data ?? []).map((row) => row.player_id).filter(Boolean) as string[])
 }
 
+async function getPlayerIdsWithSentConfirmationOlderThan(matchId: string, template: string, olderThan: Date) {
+  const { data, error } = await adminSupabase
+    .from('message_logs')
+    .select('player_id')
+    .eq('match_id', matchId)
+    .eq('type', 'CONFIRMACAO')
+    .eq('template', template)
+    .eq('status', 'SENT')
+    .lte('created_at', olderThan.toISOString())
+
+  if (error && (isMissingLogColumnError(error.message) || isMissingTemplateColumnError(error.message))) return new Set<string>()
+  if (error) throw error
+  return new Set((data ?? []).map((row) => row.player_id).filter(Boolean) as string[])
+}
+
 async function wasConfirmationAlreadySent(match: MatchRow, attendance: AttendanceRow, template: string, message: string) {
   const { data, error } = await adminSupabase
     .from('message_logs')
@@ -335,6 +371,73 @@ function getAttendanceStage(attendance: AttendanceRow) {
 function normalizePhone(value: string) {
   const digits = value.replace(/\D/g, '')
   return digits.startsWith('55') ? digits.slice(2) : digits
+}
+
+async function sendUnansweredFollowUps(match: MatchRow, pendingAttendance: AttendanceRow[], dueStages: ReminderStage[], now: Date, summary: ReminderRunSummary | MatchConfirmationSummary) {
+  const olderThan = new Date(now.getTime() - UNANSWERED_FOLLOW_UP_DELAY_MS)
+
+  for (const stage of dueStages) {
+    const originalSentPlayerIds = await getPlayerIdsWithSentConfirmationOlderThan(match.id, stage.template, olderThan)
+    if (!originalSentPlayerIds.size) continue
+
+    const followUpTemplate = getUnansweredFollowUpTemplate(stage)
+    const alreadyFollowedUp = await getAlreadySentPlayerIds(match.id, followUpTemplate)
+
+    for (const attendance of pendingAttendance) {
+      if (getAttendanceStage(attendance) !== stage.stageNumber) continue
+      if (!originalSentPlayerIds.has(attendance.player_id)) continue
+
+      if (attendance.player?.status !== 'ATIVO') {
+        summary.skippedWithoutWhatsapp += 1
+        continue
+      }
+
+      if (alreadyFollowedUp.has(attendance.player_id)) {
+        summary.skippedAlreadySent += 1
+        continue
+      }
+
+      const phone = attendance.player?.whatsapp?.replace(/\D/g, '')
+      if (!phone) {
+        summary.skippedWithoutWhatsapp += 1
+        continue
+      }
+
+      try {
+        const message = buildUnansweredFollowUpMessage(match, attendance, stage)
+        if (await wasConfirmationAlreadySent(match, attendance, followUpTemplate, message)) {
+          summary.skippedAlreadySent += 1
+          continue
+        }
+        await sendWhatsAppMessage({
+          tenant_id: match.tenant_id,
+          match_id: match.id,
+          player_id: attendance.player_id,
+          phone,
+          type: 'CONFIRMACAO',
+          template: followUpTemplate,
+          message,
+          metadata: {
+            stage: stage.label,
+            stage_number: stage.stageNumber,
+            original_template: stage.template,
+            follow_up: true,
+            follow_up_delay_minutes: 60,
+            scheduled_at: match.scheduled_at,
+            pickup_id: match.pickup_id,
+            template_parameters: buildConfirmationTemplateParameters(match, attendance),
+          },
+        })
+        summary.remindersSent += 1
+      } catch (sendError) {
+        summary.errors.push({
+          matchId: match.id,
+          playerId: attendance.player_id,
+          message: getErrorMessage(sendError, 'Falha ao enviar lembrete de resposta.'),
+        })
+      }
+    }
+  }
 }
 
 export async function runConfirmationReminderJob(options: { tenantId?: string | null; now?: Date } = {}): Promise<ReminderRunSummary> {
@@ -443,6 +546,8 @@ export async function runConfirmationReminderJob(options: { tenantId?: string | 
           }
         }
       }
+
+      await sendUnansweredFollowUps(match, pendingAttendance, dueStages, now, summary)
     } catch (matchError) {
       summary.errors.push({
         matchId: match.id,
