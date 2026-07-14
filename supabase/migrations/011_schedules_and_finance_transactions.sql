@@ -62,14 +62,15 @@ using (tenant_id = current_tenant_id() or is_super_admin())
 with check (tenant_id = current_tenant_id() or is_super_admin());
 
 insert into confirmation_schedules (tenant_id, stage_number, days_before, send_time, enabled)
-select id, stage.stage_number, stage.days_before, stage.send_time::time, true
+select id, stage.stage_number, stage.days_before, stage.send_time::time, stage.enabled
 from companies
 cross join (values
-  (1, 2, '16:00'),
-  (2, 2, '18:00'),
-  (3, 1, '10:00'),
-  (4, 0, '09:00')
-) as stage(stage_number, days_before, send_time)
+  (1, 2, '16:00', true),
+  (2, 0, '09:00', true),
+  (3, 0, '12:00', false),
+  (4, 0, '15:00', false),
+  (5, 0, '18:00', false)
+) as stage(stage_number, days_before, send_time, enabled)
 on conflict (tenant_id, stage_number) do nothing;
 
 insert into billing_settings (tenant_id)

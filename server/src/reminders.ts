@@ -4,9 +4,7 @@ import { sendWhatsAppMessage } from './whatsapp.js'
 
 export const confirmationReminderStages = [
   { stageNumber: 1, daysBefore: 2, sendTime: '16:00', template: 'CONFIRMACAO_ETAPA_1', label: 'Etapa 1' },
-  { stageNumber: 2, daysBefore: 2, sendTime: '18:00', template: 'CONFIRMACAO_ETAPA_2', label: 'Etapa 2' },
-  { stageNumber: 3, daysBefore: 1, sendTime: '10:00', template: 'CONFIRMACAO_ETAPA_3', label: 'Etapa 3' },
-  { stageNumber: 4, daysBefore: 0, sendTime: '09:00', template: 'CONFIRMACAO_ETAPA_4', label: 'Etapa 4' },
+  { stageNumber: 2, daysBefore: 0, sendTime: '09:00', template: 'CONFIRMACAO_ETAPA_2', label: 'Etapa 2' },
 ] as const
 
 const EVENT_TIME_ZONE = 'America/Sao_Paulo'
@@ -102,7 +100,7 @@ function formatTime(value: string) {
 function buildConfirmationMessage(match: MatchRow, attendance: AttendanceRow, stage: ReminderStage) {
   const playerName = attendance.player?.name?.split(' ')[0] ?? 'participante'
   const pickup = match.pickup
-  const title = stage.stageNumber >= 4 ? 'Ultima chamada' : stage.stageNumber === 1 ? 'Confirmacao aberta' : 'Reforco de confirmacao'
+  const title = stage.stageNumber === 1 ? 'Prioridade mensalistas' : stage.stageNumber === 2 ? 'Chamada geral' : 'Reforco de confirmacao'
   const lines = [
     `Agenda Sport - ${title}`,
     '',

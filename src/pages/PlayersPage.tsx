@@ -42,6 +42,12 @@ export function PlayersPage() {
   const linePlayers = roster.length - goalkeepers
   const topPlayer = [...roster].sort((a, b) => b.technical_score - a.technical_score)[0]
   const scheduleRows = useMemo(() => normalizeScheduleRows(schedules.data ?? []), [schedules.data])
+  const priorityStageNumber = useMemo(() => getPriorityStageNumber(scheduleRows), [scheduleRows])
+  const generalStageNumber = useMemo(() => getGeneralStageNumber(scheduleRows), [scheduleRows])
+  const selectableScheduleRows = useMemo(
+    () => scheduleRows.filter((row) => row.enabled || row.stage_number === selectedStage),
+    [scheduleRows, selectedStage],
+  )
   const selectedSchedule = scheduleRows.find((row) => row.stage_number === selectedStage)
 
   useEffect(() => {
@@ -55,7 +61,7 @@ export function PlayersPage() {
 
   function openNewPlayer() {
     setEditingPlayer(null)
-    setSelectedStage(1)
+    setSelectedStage(generalStageNumber)
     setShowForm(true)
     setFeedback('')
   }
@@ -291,9 +297,9 @@ export function PlayersPage() {
               </Field>
               <Field label="Etapa da convocacao">
                 <Select name="confirmation_stage" value={selectedStage} onChange={(event) => setSelectedStage(clampStage(event.target.value))}>
-                  {scheduleRows.map((row) => (
+                  {selectableScheduleRows.map((row) => (
                     <option key={row.stage_number} value={row.stage_number}>
-                      Etapa {row.stage_number}{row.enabled ? '' : ' - inativa'}
+                      Etapa {row.stage_number} - {stageRoleLabel(row.stage_number)}{row.enabled ? '' : ' - inativa'}
                     </option>
                   ))}
                 </Select>
@@ -307,8 +313,14 @@ export function PlayersPage() {
             </div>
 
             <label className="flex min-h-11 items-center gap-3 rounded-md border border-border bg-white px-3 text-sm font-semibold text-slate-700 dark:bg-slate-900 dark:text-slate-200">
-              <input name="mensalista" type="checkbox" defaultChecked={editingPlayer?.type === 'MENSALISTA'} className="size-4 accent-green-700" />
-              Mensalista
+              <input
+                name="mensalista"
+                type="checkbox"
+                defaultChecked={editingPlayer?.type === 'MENSALISTA'}
+                className="size-4 accent-green-700"
+                onChange={(event) => setSelectedStage(event.currentTarget.checked ? priorityStageNumber : generalStageNumber)}
+              />
+              Mensalista - puxar prioridade
             </label>
 
             <Field label="Observacoes"><Textarea name="notes" defaultValue={editingPlayer?.notes ?? ''} /></Field>
@@ -419,19 +431,18 @@ function normalizeScheduleRows(rows: ConfirmationSchedule[]) {
       stage_number: stageNumber,
       days_before: row?.days_before ?? defaultStageDays(stageNumber),
       send_time: String(row?.send_time ?? defaultStageTime(stageNumber)).slice(0, 5),
-      enabled: row?.enabled ?? stageNumber < 5,
+      enabled: row?.enabled ?? stageNumber <= 2,
     }
   })
 }
 
 function defaultStageDays(stageNumber: number) {
-  if (stageNumber <= 2) return 2
-  if (stageNumber === 3) return 1
+  if (stageNumber === 1) return 2
   return 0
 }
 
 function defaultStageTime(stageNumber: number) {
-  const defaults = ['16:00', '18:00', '10:00', '09:00', '12:00']
+  const defaults = ['16:00', '09:00', '12:00', '15:00', '18:00']
   return defaults[stageNumber - 1] ?? '16:00'
 }
 
@@ -439,7 +450,26 @@ function formatStagePreview(stage?: Pick<ConfirmationSchedule, 'stage_number' | 
   if (!stage) return 'Selecione uma etapa para ver quando este participante sera notificado.'
   if (!stage.enabled) return `Etapa ${stage.stage_number} esta inativa nas configuracoes. Este participante nao recebera convocacao automatica por essa etapa.`
   const dayText = stage.days_before === 0 ? 'no dia do evento' : `${stage.days_before} dia${stage.days_before === 1 ? '' : 's'} antes do evento`
-  return `Este participante sera notificado na etapa ${stage.stage_number}: ${dayText}, as ${String(stage.send_time).slice(0, 5)}.`
+  return `Este participante sera notificado na etapa ${stage.stage_number} (${stageRoleLabel(stage.stage_number)}): ${dayText}, as ${String(stage.send_time).slice(0, 5)}.`
+}
+
+function getPriorityStageNumber(rows: Array<Pick<ConfirmationSchedule, 'stage_number' | 'enabled'>>) {
+  return rows.find((row) => row.enabled && row.stage_number === 1)?.stage_number
+    ?? rows.find((row) => row.enabled)?.stage_number
+    ?? 1
+}
+
+function getGeneralStageNumber(rows: Array<Pick<ConfirmationSchedule, 'stage_number' | 'days_before' | 'enabled'>>) {
+  return rows.find((row) => row.enabled && row.stage_number === 2)?.stage_number
+    ?? rows.find((row) => row.enabled && row.days_before === 0)?.stage_number
+    ?? rows.find((row) => row.enabled)?.stage_number
+    ?? 2
+}
+
+function stageRoleLabel(stageNumber: number) {
+  if (stageNumber === 1) return 'prioridade mensalistas'
+  if (stageNumber === 2) return 'chamada geral'
+  return 'etapa extra'
 }
 
 function RosterStat({ icon, label, value }: { icon: React.ReactNode; label: string; value: number }) {

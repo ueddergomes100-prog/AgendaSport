@@ -18,10 +18,10 @@ type EditableSchedule = Pick<ConfirmationSchedule, 'stage_number' | 'days_before
 
 const defaultSchedules: EditableSchedule[] = [
   { stage_number: 1, days_before: 2, send_time: '16:00', enabled: true },
-  { stage_number: 2, days_before: 2, send_time: '18:00', enabled: true },
-  { stage_number: 3, days_before: 1, send_time: '10:00', enabled: true },
-  { stage_number: 4, days_before: 0, send_time: '09:00', enabled: true },
-  { stage_number: 5, days_before: 0, send_time: '12:00', enabled: false },
+  { stage_number: 2, days_before: 0, send_time: '09:00', enabled: true },
+  { stage_number: 3, days_before: 0, send_time: '12:00', enabled: false },
+  { stage_number: 4, days_before: 0, send_time: '15:00', enabled: false },
+  { stage_number: 5, days_before: 0, send_time: '18:00', enabled: false },
 ]
 
 export function SettingsPage() {
@@ -149,6 +149,7 @@ export function SettingsPage() {
                 <div>
                   <p className="text-xs font-black uppercase tracking-wide text-muted-foreground">Etapa</p>
                   <p className="mt-2 text-lg font-black">{row.stage_number}</p>
+                  <p className="text-xs font-semibold text-muted-foreground">{stageRoleLabel(row.stage_number)}</p>
                 </div>
                 <Field label="Dias antes">
                   <Input
@@ -255,4 +256,10 @@ function clampNumber(value: string, min: number, max: number) {
   const parsed = Number(value)
   if (!Number.isFinite(parsed)) return min
   return Math.max(min, Math.min(max, parsed))
+}
+
+function stageRoleLabel(stageNumber: number) {
+  if (stageNumber === 1) return 'Prioridade mensalistas'
+  if (stageNumber === 2) return 'Chamada geral'
+  return 'Etapa extra'
 }

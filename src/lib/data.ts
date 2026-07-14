@@ -598,9 +598,10 @@ function isMissingRelationError(message: string, relation: string) {
 function defaultConfirmationSchedules(tenantId: string): ConfirmationSchedule[] {
   return [
     { stage_number: 1, days_before: 2, send_time: '16:00', enabled: true },
-    { stage_number: 2, days_before: 2, send_time: '18:00', enabled: true },
-    { stage_number: 3, days_before: 1, send_time: '10:00', enabled: true },
-    { stage_number: 4, days_before: 0, send_time: '09:00', enabled: true },
+    { stage_number: 2, days_before: 0, send_time: '09:00', enabled: true },
+    { stage_number: 3, days_before: 0, send_time: '12:00', enabled: false },
+    { stage_number: 4, days_before: 0, send_time: '15:00', enabled: false },
+    { stage_number: 5, days_before: 0, send_time: '18:00', enabled: false },
   ].map((row) => ({
     id: `default-${row.stage_number}`,
     tenant_id: tenantId,

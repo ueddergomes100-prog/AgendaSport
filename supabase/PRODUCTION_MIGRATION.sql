@@ -53,15 +53,20 @@ using (tenant_id = current_tenant_id() or is_super_admin())
 with check (tenant_id = current_tenant_id() or is_super_admin());
 
 insert into public.confirmation_schedules (tenant_id, stage_number, days_before, send_time, enabled)
-select id, stage.stage_number, stage.days_before, stage.send_time::time, true
+select id, stage.stage_number, stage.days_before, stage.send_time::time, stage.enabled
 from public.companies
 cross join (values
-  (1, 2, '16:00'),
-  (2, 2, '18:00'),
-  (3, 1, '10:00'),
-  (4, 0, '09:00')
-) as stage(stage_number, days_before, send_time)
-on conflict (tenant_id, stage_number) do nothing;
+  (1, 2, '16:00', true),
+  (2, 0, '09:00', true),
+  (3, 0, '12:00', false),
+  (4, 0, '15:00', false),
+  (5, 0, '18:00', false)
+) as stage(stage_number, days_before, send_time, enabled)
+on conflict (tenant_id, stage_number)
+do update set
+  days_before = excluded.days_before,
+  send_time = excluded.send_time,
+  enabled = excluded.enabled;
 
 create index if not exists message_logs_match_template_idx
 on public.message_logs(match_id, type, template);

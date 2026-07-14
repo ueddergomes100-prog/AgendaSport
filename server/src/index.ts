@@ -159,13 +159,13 @@ async function getPublicRegistrationConfirmationStage(tenantId: string) {
     .order('days_before', { ascending: true })
     .order('stage_number', { ascending: true })
 
-  if (error && isMissingConfirmationSchedulesError(error.message)) return 4
+  if (error && isMissingConfirmationSchedulesError(error.message)) return 2
   if (error) throw error
 
   const rows = data ?? []
   const eventDayStage = rows.find((row) => Number(row.days_before) === 0)
-  const selectedStage = Number(eventDayStage?.stage_number ?? rows[0]?.stage_number ?? 4)
-  if (!Number.isFinite(selectedStage)) return 4
+  const selectedStage = Number(eventDayStage?.stage_number ?? rows.find((row) => row.stage_number === 2)?.stage_number ?? rows[0]?.stage_number ?? 2)
+  if (!Number.isFinite(selectedStage)) return 2
   return Math.max(1, Math.min(5, Math.trunc(selectedStage)))
 }
 
