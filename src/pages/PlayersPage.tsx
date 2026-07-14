@@ -85,6 +85,7 @@ export function PlayersPage() {
     setFeedback('')
     try {
       const form = new FormData(formElement)
+      const confirmationStage = clampStage(form.get('confirmation_stage') || selectedStage)
       const payload: Partial<Player> = {
         first_name: String(form.get('first_name')).trim(),
         last_name: String(form.get('last_name')).trim(),
@@ -95,11 +96,11 @@ export function PlayersPage() {
         status: String(form.get('status') || 'ATIVO') as Player['status'],
         suspension_reason: String(form.get('suspension_reason') || '').trim() || null,
         suspended_until: String(form.get('suspended_until') || '') || null,
-        type: form.get('mensalista') === 'on' ? 'MENSALISTA' : 'AVULSO',
+        type: confirmationStage === priorityStageNumber ? 'MENSALISTA' : 'AVULSO',
         technical_score: Number(form.get('technical_score')),
         primary_position: String(form.get('primary_position')) as Position,
         secondary_position: null,
-        confirmation_stage: Number(form.get('confirmation_stage') || 1),
+        confirmation_stage: confirmationStage,
         notes: String(form.get('notes') || '').trim(),
       }
 
@@ -295,7 +296,7 @@ export function PlayersPage() {
                   <option value="SUSPENSO">Suspenso</option>
                 </Select>
               </Field>
-              <Field label="Etapa da convocacao">
+              <Field label="Perfil da convocacao">
                 <Select name="confirmation_stage" value={selectedStage} onChange={(event) => setSelectedStage(clampStage(event.target.value))}>
                   {selectableScheduleRows.map((row) => (
                     <option key={row.stage_number} value={row.stage_number}>
@@ -311,17 +312,6 @@ export function PlayersPage() {
             <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-semibold text-green-950 dark:border-green-900/50 dark:bg-green-950/30 dark:text-green-100">
               {formatStagePreview(selectedSchedule)}
             </div>
-
-            <label className="flex min-h-11 items-center gap-3 rounded-md border border-border bg-white px-3 text-sm font-semibold text-slate-700 dark:bg-slate-900 dark:text-slate-200">
-              <input
-                name="mensalista"
-                type="checkbox"
-                defaultChecked={editingPlayer?.type === 'MENSALISTA'}
-                className="size-4 accent-green-700"
-                onChange={(event) => setSelectedStage(event.currentTarget.checked ? priorityStageNumber : generalStageNumber)}
-              />
-              Mensalista - puxar prioridade
-            </label>
 
             <Field label="Observacoes"><Textarea name="notes" defaultValue={editingPlayer?.notes ?? ''} /></Field>
             <div className="grid gap-3 md:grid-cols-2">
