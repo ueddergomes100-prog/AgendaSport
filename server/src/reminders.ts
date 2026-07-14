@@ -3,14 +3,21 @@ import { adminSupabase } from './supabase.js'
 import { sendWhatsAppMessage } from './whatsapp.js'
 
 export const confirmationReminderStages = [
-  { hoursBefore: 72, template: 'CONFIRMACAO_72H', label: '72h' },
-  { hoursBefore: 48, template: 'CONFIRMACAO_48H', label: '48h' },
-  { hoursBefore: 24, template: 'CONFIRMACAO_24H', label: '24h' },
+  { stageNumber: 1, daysBefore: 2, sendTime: '16:00', template: 'CONFIRMACAO_ETAPA_1', label: 'Etapa 1' },
+  { stageNumber: 2, daysBefore: 2, sendTime: '18:00', template: 'CONFIRMACAO_ETAPA_2', label: 'Etapa 2' },
+  { stageNumber: 3, daysBefore: 1, sendTime: '10:00', template: 'CONFIRMACAO_ETAPA_3', label: 'Etapa 3' },
+  { stageNumber: 4, daysBefore: 0, sendTime: '09:00', template: 'CONFIRMACAO_ETAPA_4', label: 'Etapa 4' },
 ] as const
 
 const EVENT_TIME_ZONE = 'America/Sao_Paulo'
 
-type ReminderStage = (typeof confirmationReminderStages)[number]
+type ReminderStage = {
+  stageNumber: number
+  daysBefore: number
+  sendTime: string
+  template: string
+  label: string
+}
 
 type PickupRow = {
   id: string
@@ -63,14 +70,6 @@ export type MatchConfirmationSummary = Omit<ReminderRunSummary, 'matchesChecked'
   matchId: string
 }
 
-function currentReminderStage(scheduledAt: string, now: Date): ReminderStage | null {
-  const diffHours = (new Date(scheduledAt).getTime() - now.getTime()) / 36e5
-  if (diffHours <= 0 || diffHours > 72) return null
-  if (diffHours <= 24) return confirmationReminderStages[2]
-  if (diffHours <= 48) return confirmationReminderStages[1]
-  return confirmationReminderStages[0]
-}
-
 function formatDateTime(value: string) {
   return new Date(value).toLocaleString('pt-BR', {
     timeZone: EVENT_TIME_ZONE,
@@ -102,7 +101,7 @@ function formatTime(value: string) {
 function buildConfirmationMessage(match: MatchRow, attendance: AttendanceRow, stage: ReminderStage) {
   const playerName = attendance.player?.name?.split(' ')[0] ?? 'participante'
   const pickup = match.pickup
-  const title = stage.template === 'CONFIRMACAO_24H' ? 'Ultima chamada' : stage.template === 'CONFIRMACAO_48H' ? 'Reforco de confirmacao' : 'Confirmacao aberta'
+  const title = stage.stageNumber >= 4 ? 'Ultima chamada' : stage.stageNumber === 1 ? 'Confirmacao aberta' : 'Reforco de confirmacao'
   const lines = [
     `Agenda Sport - ${title}`,
     '',
@@ -196,6 +195,57 @@ async function getMatchForConfirmation(matchId: string, tenantId?: string | null
   return data as unknown as MatchRow
 }
 
+async function getConfirmationSchedules(tenantId: string): Promise<ReminderStage[]> {
+  const { data, error } = await adminSupabase
+    .from('confirmation_schedules')
+    .select('stage_number, days_before, send_time, enabled')
+    .eq('tenant_id', tenantId)
+    .eq('enabled', true)
+    .order('stage_number')
+
+  if (error && isMissingScheduleTableError(error.message)) return [...confirmationReminderStages]
+  if (error) throw error
+
+  const rows = (data ?? []).slice(0, 5)
+  if (rows.length < 4) return [...confirmationReminderStages]
+
+  return rows.map((row) => ({
+    stageNumber: row.stage_number,
+    daysBefore: row.days_before,
+    sendTime: String(row.send_time).slice(0, 5),
+    template: `CONFIRMACAO_ETAPA_${row.stage_number}`,
+    label: `Etapa ${row.stage_number}`,
+  }))
+}
+
+function dueReminderStages(match: MatchRow, schedules: ReminderStage[], now: Date) {
+  const scheduledAt = new Date(match.scheduled_at)
+  if (scheduledAt <= now) return []
+  return schedules.filter((stage) => reminderTargetDate(match.scheduled_at, stage) <= now)
+}
+
+function reminderTargetDate(scheduledAt: string, stage: ReminderStage) {
+  const parts = getSaoPauloDateParts(new Date(scheduledAt))
+  const targetDate = new Date(Date.UTC(parts.year, parts.month - 1, parts.day))
+  targetDate.setUTCDate(targetDate.getUTCDate() - stage.daysBefore)
+  const [hour = 0, minute = 0] = stage.sendTime.split(':').map(Number)
+  const yyyy = targetDate.getUTCFullYear()
+  const mm = String(targetDate.getUTCMonth() + 1).padStart(2, '0')
+  const dd = String(targetDate.getUTCDate()).padStart(2, '0')
+  return new Date(`${yyyy}-${mm}-${dd}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00-03:00`)
+}
+
+function getSaoPauloDateParts(date: Date) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: EVENT_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date)
+  const value = (type: string) => Number(parts.find((part) => part.type === type)?.value)
+  return { year: value('year'), month: value('month'), day: value('day') }
+}
+
 async function getAlreadySentPlayerIds(matchId: string, template: string) {
   const query = adminSupabase
     .from('message_logs')
@@ -260,6 +310,10 @@ function isMissingLogColumnError(message: string) {
   )
 }
 
+function isMissingScheduleTableError(message: string) {
+  return message.includes('confirmation_schedules') && (message.includes('schema cache') || message.includes('does not exist') || message.includes('relation'))
+}
+
 function normalizePhone(value: string) {
   const digits = value.replace(/\D/g, '')
   return digits.startsWith('55') ? digits.slice(2) : digits
@@ -267,7 +321,7 @@ function normalizePhone(value: string) {
 
 export async function runConfirmationReminderJob(options: { tenantId?: string | null; now?: Date } = {}): Promise<ReminderRunSummary> {
   const now = options.now ?? new Date()
-  const upperBound = new Date(now.getTime() + 72 * 60 * 60 * 1000)
+  const upperBound = new Date(now.getTime() + 31 * 24 * 60 * 60 * 1000)
   const summary: ReminderRunSummary = {
     matchesChecked: 0,
     matchesOpened: 0,
@@ -293,66 +347,80 @@ export async function runConfirmationReminderJob(options: { tenantId?: string | 
   if (error) throw error
 
   for (const match of (matches ?? []) as unknown as MatchRow[]) {
-    const stage = currentReminderStage(match.scheduled_at, now)
-    if (!stage) continue
+    let schedules: ReminderStage[]
+    try {
+      schedules = await getConfirmationSchedules(match.tenant_id)
+    } catch (scheduleError) {
+      summary.errors.push({
+        matchId: match.id,
+        message: scheduleError instanceof Error ? scheduleError.message : 'Falha ao carregar horarios de convocacao.',
+      })
+      continue
+    }
+
+    const dueStages = dueReminderStages(match, schedules, now)
+    if (!dueStages.length) continue
 
     summary.matchesChecked += 1
 
     try {
-      if (stage.template === 'CONFIRMACAO_72H') {
-        if (await openMatchIfScheduled(match)) summary.matchesOpened += 1
-        summary.invitationsCreated += await ensureInvitations(match)
-      }
+      if (await openMatchIfScheduled(match)) summary.matchesOpened += 1
+      summary.invitationsCreated += await ensureInvitations(match)
 
       const pendingAttendance = await getPendingAttendance(match.id)
-      const alreadySent = await getAlreadySentPlayerIds(match.id, stage.template)
 
-      for (const attendance of pendingAttendance) {
-        if (attendance.player?.status !== 'ATIVO') {
-          summary.skippedWithoutWhatsapp += 1
-          continue
-        }
+      for (const stage of dueStages) {
+        const alreadySent = await getAlreadySentPlayerIds(match.id, stage.template)
 
-        if (alreadySent.has(attendance.player_id)) {
-          summary.skippedAlreadySent += 1
-          continue
-        }
+        for (const attendance of pendingAttendance) {
+          if (attendance.player?.status !== 'ATIVO') {
+            summary.skippedWithoutWhatsapp += 1
+            continue
+          }
 
-        const phone = attendance.player?.whatsapp?.replace(/\D/g, '')
-        if (!phone) {
-          summary.skippedWithoutWhatsapp += 1
-          continue
-        }
-
-        try {
-          const message = buildConfirmationMessage(match, attendance, stage)
-          if (await wasConfirmationAlreadySent(match, attendance, stage.template, message)) {
+          if (alreadySent.has(attendance.player_id)) {
             summary.skippedAlreadySent += 1
             continue
           }
-          await sendWhatsAppMessage({
-            tenant_id: match.tenant_id,
-            match_id: match.id,
-            player_id: attendance.player_id,
-            phone,
-            type: 'CONFIRMACAO',
-            template: stage.template,
-            message,
-            metadata: {
-              stage: stage.label,
-              hours_before: stage.hoursBefore,
-              scheduled_at: match.scheduled_at,
-              pickup_id: match.pickup_id,
-              template_parameters: buildConfirmationTemplateParameters(match, attendance),
-            },
-          })
-          summary.remindersSent += 1
-        } catch (sendError) {
-          summary.errors.push({
-            matchId: match.id,
-            playerId: attendance.player_id,
-            message: sendError instanceof Error ? sendError.message : 'Falha ao enviar lembrete.',
-          })
+
+          const phone = attendance.player?.whatsapp?.replace(/\D/g, '')
+          if (!phone) {
+            summary.skippedWithoutWhatsapp += 1
+            continue
+          }
+
+          try {
+            const message = buildConfirmationMessage(match, attendance, stage)
+            if (await wasConfirmationAlreadySent(match, attendance, stage.template, message)) {
+              summary.skippedAlreadySent += 1
+              continue
+            }
+            await sendWhatsAppMessage({
+              tenant_id: match.tenant_id,
+              match_id: match.id,
+              player_id: attendance.player_id,
+              phone,
+              type: 'CONFIRMACAO',
+              template: stage.template,
+              message,
+              metadata: {
+                stage: stage.label,
+                stage_number: stage.stageNumber,
+                days_before: stage.daysBefore,
+                send_time: stage.sendTime,
+                scheduled_at: match.scheduled_at,
+                pickup_id: match.pickup_id,
+                template_parameters: buildConfirmationTemplateParameters(match, attendance),
+              },
+            })
+            summary.remindersSent += 1
+          } catch (sendError) {
+            summary.errors.push({
+              matchId: match.id,
+              playerId: attendance.player_id,
+              message: sendError instanceof Error ? sendError.message : 'Falha ao enviar lembrete.',
+            })
+          }
         }
       }
     } catch (matchError) {

@@ -19,6 +19,7 @@ import { PlayersPage } from './pages/PlayersPage'
 import { PortalPage } from './pages/PortalPage'
 import { PublicRegistrationPage } from './pages/PublicRegistrationPage'
 import { SchedulePage } from './pages/SchedulePage'
+import { SettingsPage } from './pages/SettingsPage'
 import { StatsPage } from './pages/StatsPage'
 
 function ProtectedApp() {
@@ -78,6 +79,7 @@ export default function App() {
           <Route path="/sorteio" element={<TenantOnly><DrawPage /></TenantOnly>} />
           <Route path="/estatisticas" element={<TenantOnly><StatsPage /></TenantOnly>} />
           <Route path="/financeiro" element={<TenantOnly><FinancePage /></TenantOnly>} />
+          <Route path="/configuracoes" element={<TenantOnly><SettingsPage /></TenantOnly>} />
           <Route path="/admin" element={<AdminPage />} />
         </Route>
         <Route path="*" element={<NotFoundPage />} />

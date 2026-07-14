@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Award, CalendarDays, Copy, Download, Handshake, Medal, MessageCircle, Trophy } from 'lucide-react'
+import { Award, CalendarDays, ClipboardList, Copy, Download, Handshake, Medal, MessageCircle, Trophy } from 'lucide-react'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Button } from '../components/ui/button'
 import { Card } from '../components/ui/card'
@@ -71,6 +71,8 @@ export function StatsPage() {
   const totalGoals = filteredRows.reduce((sum, row) => sum + (row.goals ?? 0), 0)
   const totalAssists = filteredRows.reduce((sum, row) => sum + (row.assists ?? 0), 0)
   const chartData = scorers.slice(0, 8).map((player) => ({ name: player.name.split(' ')[0], indicador: player.goals, assistencias: player.assists }))
+  const matchResults = useMemo(() => getUniqueMatchResults(filteredRows), [filteredRows])
+  const teamRanking = useMemo(() => aggregateTeamWinners(matchResults), [matchResults])
 
   const whatsappSummary = [
     `RELATORIO AGENDA SPORT - ${company.data?.name ?? 'Evento'}`,
@@ -78,6 +80,9 @@ export function StatsPage() {
     '',
     `Destaque em ${primaryStat.labels.lowerPlural}: ${topScorer ? `${topScorer.name} (${topScorer.goals})` : '-'}`,
     `Garcom: ${topAssistant ? `${topAssistant.name} (${topAssistant.assists} assist.)` : '-'}`,
+    '',
+    'Equipes campeas:',
+    ...teamRanking.slice(0, 5).map((team, index) => `${index + 1}. ${team.name} - ${team.wins} vitoria(s)`),
     '',
     `Top ${primaryStat.labels.lowerPlural}:`,
     ...scorers.slice(0, 5).map((player, index) => `${index + 1}. ${player.name} - ${player.goals}`),
@@ -163,6 +168,25 @@ export function StatsPage() {
           <ReportRanking title="Maiores assistentes" label="Assist." rows={assistants.slice(0, 10).map((player) => ({ name: player.name, meta: player.position, value: `${player.assists} assist.` }))} />
         </div>
 
+        <div className="grid gap-4 p-5 pt-0 xl:grid-cols-[420px_1fr]">
+          <ReportRanking title="Equipes campeas" label="V" rows={teamRanking.slice(0, 10).map((team) => ({ name: team.name, meta: `${team.games} jogos com resultado`, value: `${team.wins}V` }))} />
+          <div className="rounded-2xl border border-border bg-white p-4 dark:bg-slate-950">
+            <h3 className="mb-4 text-lg font-black">Resultados dos eventos</h3>
+            <div className="grid gap-2">
+              {matchResults.slice(0, 8).map((match) => (
+                <div key={match.matchId} className="rounded-xl border border-border bg-white/70 p-3 dark:bg-slate-950/40">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="font-black">{match.title}</p>
+                    <span className="rounded-full bg-muted px-3 py-1 text-xs font-black text-muted-foreground">{new Date(match.scheduledAt).toLocaleDateString('pt-BR')}</span>
+                  </div>
+                  <p className="mt-2 text-sm font-semibold text-muted-foreground">{formatTeamScore(match.results)}</p>
+                </div>
+              ))}
+              {!matchResults.length && <EmptyStats />}
+            </div>
+          </div>
+        </div>
+
         <div className="no-print flex flex-wrap justify-end gap-2 border-t border-border p-5">
           <Button type="button" variant="ghost" onClick={copyReportToWhatsApp}>
             <Copy size={16} />
@@ -235,6 +259,39 @@ export function StatsPage() {
         </Card>
       </section>
 
+      <section className="no-print grid gap-4 xl:grid-cols-[420px_1fr]">
+        <Card>
+          <div className="mb-4 flex items-center gap-2">
+            <Medal className="text-primary" />
+            <h2 className="text-lg font-black">Equipes campeas</h2>
+          </div>
+          <div className="grid gap-2">
+            {teamRanking.slice(0, 10).map((team, index) => (
+              <RankingRow key={team.name} index={index + 1} name={team.name} meta={`${team.games} jogos com resultado`} value={`${team.wins}V`} />
+            ))}
+            {!teamRanking.length && <EmptyStats />}
+          </div>
+        </Card>
+        <Card>
+          <div className="mb-4 flex items-center gap-2">
+            <ClipboardList className="text-primary" />
+            <h2 className="text-lg font-black">Resultados recentes</h2>
+          </div>
+          <div className="grid gap-2">
+            {matchResults.slice(0, 8).map((match) => (
+              <div key={match.matchId} className="rounded-xl border border-border bg-white/70 p-3 dark:bg-slate-950/40">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="font-black">{match.title}</p>
+                  <span className="text-xs font-semibold text-muted-foreground">{new Date(match.scheduledAt).toLocaleDateString('pt-BR')}</span>
+                </div>
+                <p className="mt-2 text-sm font-semibold text-muted-foreground">{formatTeamScore(match.results)}</p>
+              </div>
+            ))}
+            {!matchResults.length && <EmptyStats />}
+          </div>
+        </Card>
+      </section>
+
       <Card className="no-print">
         <h2 className="text-lg font-black">{primaryStat.labels.plural} e assistencias por participante</h2>
         <div className="mt-4 h-80">
@@ -292,4 +349,51 @@ function EmptyStats() {
 function formatCampaign(player: { wins: number; draws: number; losses: number; games: number }) {
   if (!player.games) return 'sem presenca'
   return `${player.games} eventos, ${player.wins}V ${player.draws}E ${player.losses}D`
+}
+
+function getUniqueMatchResults(rows: PlayerStatRow[]) {
+  const map = new Map<string, {
+    matchId: string
+    scheduledAt: string
+    title: string
+    results: NonNullable<PlayerStatRow['match']>['team_results']
+  }>()
+
+  rows.forEach((row) => {
+    const results = row.match?.team_results ?? []
+    if (!row.match || !results.length || map.has(row.match_id)) return
+    map.set(row.match_id, {
+      matchId: row.match_id,
+      scheduledAt: row.match.scheduled_at,
+      title: row.match.notes?.trim() || 'Evento esportivo',
+      results,
+    })
+  })
+
+  return [...map.values()].sort((left, right) => new Date(right.scheduledAt).getTime() - new Date(left.scheduledAt).getTime())
+}
+
+function aggregateTeamWinners(matches: ReturnType<typeof getUniqueMatchResults>) {
+  const map = new Map<string, { name: string; wins: number; games: number }>()
+
+  matches.forEach((match) => {
+    const results = match.results ?? []
+    if (!results.length) return
+    const highestScore = Math.max(...results.map((team) => Number(team.score ?? 0)))
+    const winners = results.filter((team) => Number(team.score ?? 0) === highestScore)
+
+    results.forEach((team) => {
+      const current = map.get(team.name) ?? { name: team.name, wins: 0, games: 0 }
+      current.games += 1
+      if (winners.length === 1 && winners[0]?.id === team.id) current.wins += 1
+      map.set(team.name, current)
+    })
+  })
+
+  return [...map.values()].sort((left, right) => right.wins - left.wins || right.games - left.games || left.name.localeCompare(right.name, 'pt-BR'))
+}
+
+function formatTeamScore(results: NonNullable<PlayerStatRow['match']>['team_results']) {
+  if (!results?.length) return 'Sem resultado informado'
+  return results.map((team) => `${team.name} ${team.score}`).join(' x ')
 }

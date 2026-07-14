@@ -38,6 +38,7 @@ type AttendanceProcessingResult = {
   reason?: string
   replyStatus?: AttendanceReplyStatus
   ackStatus?: string
+  chargeStatus?: string
 }
 
 const verificationQuerySchema = z.object({
@@ -176,6 +177,7 @@ whatsappWebhookRouter.post('/whatsapp', async (req, res) => {
             handled: processing?.handled ?? false,
             reason: processing?.reason,
             ack_status: processing?.ackStatus,
+            charge_status: processing?.chargeStatus,
           },
         })
 
@@ -303,6 +305,10 @@ async function processAttendanceReply(fromPhone: string, replyStatus: Attendance
     }
   }
 
+  const chargeStatus = replyStatus === 'CONFIRMADO'
+    ? await ensureCasualChargeForConfirmation(attendance, fromPhone)
+    : 'SKIPPED'
+
   return {
     tenantId: attendance.tenant_id,
     matchId: attendance.match_id,
@@ -311,7 +317,87 @@ async function processAttendanceReply(fromPhone: string, replyStatus: Attendance
     response: `Attendance updated to ${replyStatus}`,
     handled: true,
     replyStatus,
+    chargeStatus,
   }
+}
+
+async function ensureCasualChargeForConfirmation(attendance: AttendanceCandidate, inboundPhone: string) {
+  const { data: settings, error: settingsError } = await adminSupabase
+    .from('billing_settings')
+    .select('auto_charge_casual_players, default_provider')
+    .eq('tenant_id', attendance.tenant_id)
+    .maybeSingle()
+
+  if (settingsError && isMissingBillingSettingsError(settingsError.message)) return 'SKIPPED_SETTINGS_TABLE_MISSING'
+  if (settingsError) throw settingsError
+  if (!settings?.auto_charge_casual_players) return 'SKIPPED_DISABLED'
+
+  const { data: details, error: detailsError } = await adminSupabase
+    .from('attendance')
+    .select('player:players(id, name, type, whatsapp), match:matches(id, scheduled_at, pickup:pickups(name, casual_price))')
+    .eq('id', attendance.id)
+    .single()
+  if (detailsError) throw detailsError
+
+  const row = details as unknown as {
+    player: { id: string; name: string; type: string; whatsapp: string | null } | null
+    match: { id: string; scheduled_at: string; pickup: { name: string; casual_price: number } | null } | null
+  }
+
+  if (row.player?.type !== 'AVULSO') return 'SKIPPED_NOT_CASUAL'
+  const amount = Number(row.match?.pickup?.casual_price ?? 0)
+  if (!amount) return 'SKIPPED_ZERO_AMOUNT'
+
+  const { data: existing, error: existingError } = await adminSupabase
+    .from('payments')
+    .select('id')
+    .eq('tenant_id', attendance.tenant_id)
+    .eq('match_id', attendance.match_id)
+    .eq('player_id', attendance.player_id)
+    .neq('status', 'CANCELADO')
+    .limit(1)
+  if (existingError) throw existingError
+  if (existing?.length) return 'SKIPPED_ALREADY_EXISTS'
+
+  const { data: payment, error: paymentError } = await adminSupabase
+    .from('payments')
+    .insert({
+      tenant_id: attendance.tenant_id,
+      match_id: attendance.match_id,
+      player_id: attendance.player_id,
+      provider: settings.default_provider ?? 'MANUAL_PIX',
+      amount,
+      due_date: new Date().toISOString().slice(0, 10),
+      status: 'PENDENTE',
+    })
+    .select('id')
+    .single()
+  if (paymentError) throw paymentError
+
+  const phone = row.player.whatsapp || inboundPhone
+  await sendWhatsAppMessage({
+    tenant_id: attendance.tenant_id,
+    match_id: attendance.match_id,
+    player_id: attendance.player_id,
+    phone,
+    type: 'COBRANCA',
+    template: null,
+    message: [
+      'Agenda Sport - cobranca do evento',
+      '',
+      `Ola, ${row.player.name.split(' ')[0]}! Sua presenca foi confirmada.`,
+      `Evento: ${row.match?.pickup?.name ?? 'Evento esportivo'}`,
+      `Valor: ${formatCurrency(amount)}`,
+      '',
+      'Pagamento pendente. O organizador informara a forma de pagamento ou link quando disponivel.',
+    ].join('\n'),
+    metadata: {
+      source: 'casual_confirmation_auto_charge',
+      payment_id: payment.id,
+    },
+  })
+
+  return 'CREATED'
 }
 
 async function sendAttendanceAcknowledgement({
@@ -439,6 +525,14 @@ function phoneMatchScore(playerPhone: string | null, inboundDigits: string) {
   }
 
   return 0
+}
+
+function isMissingBillingSettingsError(message: string) {
+  return message.includes('billing_settings') && (message.includes('schema cache') || message.includes('does not exist') || message.includes('relation'))
+}
+
+function formatCurrency(value: number) {
+  return value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 }
 
 function phoneVariants(digits: string) {

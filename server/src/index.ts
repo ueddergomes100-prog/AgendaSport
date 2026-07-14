@@ -389,6 +389,83 @@ app.post('/api/billing/payment-link', requireAuth, async (req, res) => {
   return res.status(201).json({ payment: data, checkout_url: data.checkout_url })
 })
 
+app.post('/api/billing/monthly/run', requireAuth, async (req, res) => {
+  let tenantId: string
+  try {
+    tenantId = requireRequestTenantId(req.user!)
+  } catch (error) {
+    return res.status(400).json({ error: error instanceof Error ? error.message : 'Usuario sem tenant.' })
+  }
+
+  const { data: settings, error: settingsError } = await adminSupabase
+    .from('billing_settings')
+    .select('monthly_billing_day, default_provider')
+    .eq('tenant_id', tenantId)
+    .maybeSingle()
+  if (settingsError && !isMissingBillingTableError(settingsError.message)) return res.status(500).json({ error: settingsError.message })
+
+  const today = new Date()
+  const year = today.getFullYear()
+  const month = today.getMonth()
+  const dueDay = Math.max(1, Math.min(28, Number(settings?.monthly_billing_day ?? 2)))
+  const dueDate = new Date(year, month, dueDay)
+  const periodKey = `${year}-${String(month + 1).padStart(2, '0')}`
+
+  const { data: pickupPriceRows, error: pickupError } = await adminSupabase
+    .from('pickups')
+    .select('monthly_price')
+    .eq('tenant_id', tenantId)
+    .gt('monthly_price', 0)
+    .order('monthly_price', { ascending: false })
+    .limit(1)
+  if (pickupError) return res.status(500).json({ error: pickupError.message })
+  const amount = Number(pickupPriceRows?.[0]?.monthly_price ?? 0)
+  if (!amount) return res.status(400).json({ error: 'Configure o valor mensal em pelo menos um evento antes de gerar mensalidades.' })
+
+  const { data: players, error: playersError } = await adminSupabase
+    .from('players')
+    .select('id, name')
+    .eq('tenant_id', tenantId)
+    .eq('status', 'ATIVO')
+    .eq('type', 'MENSALISTA')
+  if (playersError) return res.status(500).json({ error: playersError.message })
+  if (!players?.length) return res.json({ created: 0, skipped: 0, amount, due_date: dueDate.toISOString().slice(0, 10) })
+
+  const { data: existing, error: existingError } = await adminSupabase
+    .from('payments')
+    .select('player_id')
+    .eq('tenant_id', tenantId)
+    .gte('due_date', `${periodKey}-01`)
+    .lte('due_date', `${periodKey}-31`)
+    .neq('status', 'CANCELADO')
+  if (existingError) return res.status(500).json({ error: existingError.message })
+  const existingPlayerIds = new Set((existing ?? []).map((payment) => payment.player_id).filter(Boolean))
+  const missingPlayers = players.filter((player) => !existingPlayerIds.has(player.id))
+
+  if (missingPlayers.length) {
+    const { error: insertError } = await adminSupabase.from('payments').insert(missingPlayers.map((player) => ({
+      tenant_id: tenantId,
+      player_id: player.id,
+      provider: settings?.default_provider ?? 'MANUAL_PIX',
+      amount,
+      due_date: dueDate.toISOString().slice(0, 10),
+      status: 'PENDENTE',
+    })))
+    if (insertError) return res.status(500).json({ error: insertError.message })
+  }
+
+  return res.json({
+    created: missingPlayers.length,
+    skipped: players.length - missingPlayers.length,
+    amount,
+    due_date: dueDate.toISOString().slice(0, 10),
+  })
+})
+
+function isMissingBillingTableError(message: string) {
+  return message.includes('billing_settings') && (message.includes('schema cache') || message.includes('does not exist') || message.includes('relation'))
+}
+
 app.post('/api/backups/manual', requireAuth, requireSuperAdmin, async (_req, res) => {
   const { data, error } = await adminSupabase.from('backup_jobs').insert({ status: 'REQUESTED', requested_by: 'SUPER_ADMIN' }).select().single()
   if (error) return res.status(500).json({ error: error.message })

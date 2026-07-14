@@ -1,6 +1,21 @@
 import { supabase } from './supabase'
 import { toDbPosition } from './positions'
-import type { Attendance, Company, DashboardStats, Match, MatchTeamResult, Pickup, Player, PlayerStatRow, Profile, TeamDrawRecord } from './types'
+import type {
+  Attendance,
+  BillingSettings,
+  Company,
+  ConfirmationSchedule,
+  DashboardStats,
+  FinanceTransaction,
+  Match,
+  MatchTeamResult,
+  Payment,
+  Pickup,
+  Player,
+  PlayerStatRow,
+  Profile,
+  TeamDrawRecord,
+} from './types'
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
 
@@ -71,7 +86,7 @@ function isOrphanAutomaticMatch(match: Pick<Match, 'pickup_id' | 'notes'>) {
 export async function getPlayerStats(): Promise<PlayerStatRow[]> {
   const { data, error } = await supabase
     .from('match_player_stats')
-    .select('*, player:players(id, name, primary_position, photo_url), match:matches(id, scheduled_at, team_a_name, team_b_name)')
+    .select('*, player:players(id, name, primary_position, photo_url), match:matches(id, scheduled_at, team_a_name, team_b_name, team_results, notes)')
     .order('created_at', { ascending: false })
   if (error) throw error
   return data ?? []
@@ -80,7 +95,7 @@ export async function getPlayerStats(): Promise<PlayerStatRow[]> {
 export async function getMatchPlayerStats(matchId: string): Promise<PlayerStatRow[]> {
   const { data, error } = await supabase
     .from('match_player_stats')
-    .select('*, player:players(id, name, primary_position, photo_url), match:matches(id, scheduled_at, team_a_name, team_b_name)')
+    .select('*, player:players(id, name, primary_position, photo_url), match:matches(id, scheduled_at, team_a_name, team_b_name, team_results, notes)')
     .eq('match_id', matchId)
     .order('created_at', { ascending: false })
   if (error) throw error
@@ -112,6 +127,125 @@ export async function getAttendance(matchId: string): Promise<Attendance[]> {
 export async function getDashboardStats(): Promise<DashboardStats> {
   const { data, error } = await supabase.rpc('get_dashboard_stats')
   if (error) throw error
+  return data
+}
+
+export async function getPayments(): Promise<Payment[]> {
+  const { data, error } = await supabase
+    .from('payments')
+    .select('*, player:players(id, name, whatsapp)')
+    .order('due_date', { ascending: false })
+  if (error) throw error
+  return data ?? []
+}
+
+export async function createPayment(input: Partial<Payment>) {
+  const profile = await requireTenantProfile()
+  const payload = { ...input, tenant_id: profile.tenant_id }
+  const { data, error } = await supabase.from('payments').insert(payload).select().single()
+  if (error) throw error
+  return data as Payment
+}
+
+export async function updatePayment(id: string, input: Partial<Payment>) {
+  const { error } = await supabase.from('payments').update(input).eq('id', id)
+  if (error) throw error
+}
+
+export async function getFinanceTransactions(): Promise<FinanceTransaction[]> {
+  const { data, error } = await supabase
+    .from('finance_transactions')
+    .select('*, player:players(id, name)')
+    .order('occurred_on', { ascending: false })
+    .order('created_at', { ascending: false })
+  if (error && isMissingRelationError(error.message, 'finance_transactions')) return []
+  if (error) throw error
+  return data ?? []
+}
+
+export async function createFinanceTransaction(input: Partial<FinanceTransaction>) {
+  const profile = await requireTenantProfile()
+  const { data, error } = await supabase
+    .from('finance_transactions')
+    .insert({ ...input, tenant_id: profile.tenant_id })
+    .select()
+    .single()
+  if (error) throw error
+  return data as FinanceTransaction
+}
+
+export async function updateFinanceTransaction(id: string, input: Partial<FinanceTransaction>) {
+  const { error } = await supabase.from('finance_transactions').update(input).eq('id', id)
+  if (error) throw error
+}
+
+export async function deleteFinanceTransaction(id: string) {
+  const { error } = await supabase.from('finance_transactions').delete().eq('id', id)
+  if (error) throw error
+}
+
+export async function getConfirmationSchedules(): Promise<ConfirmationSchedule[]> {
+  const profile = await requireTenantProfile()
+  const tenantId = profile.tenant_id as string
+  const { data, error } = await supabase
+    .from('confirmation_schedules')
+    .select('*')
+    .eq('tenant_id', tenantId)
+    .order('stage_number')
+  if (error && isMissingRelationError(error.message, 'confirmation_schedules')) return defaultConfirmationSchedules(tenantId)
+  if (error) throw error
+  return data?.length ? data : defaultConfirmationSchedules(tenantId)
+}
+
+export async function saveConfirmationSchedules(rows: Array<Pick<ConfirmationSchedule, 'stage_number' | 'days_before' | 'send_time' | 'enabled'>>) {
+  const profile = await requireTenantProfile()
+  const payload = rows.map((row) => ({
+    tenant_id: profile.tenant_id,
+    stage_number: row.stage_number,
+    days_before: row.days_before,
+    send_time: row.send_time,
+    enabled: row.enabled,
+  }))
+  const { error } = await supabase.from('confirmation_schedules').upsert(payload, { onConflict: 'tenant_id,stage_number' })
+  if (error) throw error
+}
+
+export async function getBillingSettings(): Promise<BillingSettings | null> {
+  const profile = await requireTenantProfile()
+  const { data, error } = await supabase
+    .from('billing_settings')
+    .select('*')
+    .eq('tenant_id', profile.tenant_id)
+    .maybeSingle()
+  if (error && isMissingRelationError(error.message, 'billing_settings')) return null
+  if (error) throw error
+  return data as BillingSettings | null
+}
+
+export async function saveBillingSettings(input: Pick<BillingSettings, 'monthly_billing_day' | 'default_provider' | 'auto_charge_casual_players'>) {
+  const profile = await requireTenantProfile()
+  const { data, error } = await supabase
+    .from('billing_settings')
+    .upsert({ ...input, tenant_id: profile.tenant_id, updated_at: new Date().toISOString() }, { onConflict: 'tenant_id' })
+    .select()
+    .single()
+  if (error) throw error
+  return data as BillingSettings
+}
+
+export async function runMonthlyBilling(): Promise<{ created: number; skipped: number; amount: number; due_date: string }> {
+  const { data: session } = await supabase.auth.getSession()
+  const token = session.session?.access_token
+  if (!token) throw new Error('Sessao expirada. Faca login novamente.')
+  const response = await fetch(apiUrl('/api/billing/monthly/run'), {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+  })
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(data.error ?? 'Nao foi possivel gerar mensalidades.')
   return data
 }
 
@@ -301,6 +435,24 @@ async function deleteMatchChildren(matchIds: string[]) {
 
 function isMissingColumnError(message: string, column: string) {
   return message.includes(column) && (message.includes('column') || message.includes('schema cache'))
+}
+
+function isMissingRelationError(message: string, relation: string) {
+  return message.includes(relation) && (message.includes('schema cache') || message.includes('does not exist') || message.includes('Could not find'))
+}
+
+function defaultConfirmationSchedules(tenantId: string): ConfirmationSchedule[] {
+  return [
+    { stage_number: 1, days_before: 2, send_time: '16:00', enabled: true },
+    { stage_number: 2, days_before: 2, send_time: '18:00', enabled: true },
+    { stage_number: 3, days_before: 1, send_time: '10:00', enabled: true },
+    { stage_number: 4, days_before: 0, send_time: '09:00', enabled: true },
+  ].map((row) => ({
+    id: `default-${row.stage_number}`,
+    tenant_id: tenantId,
+    created_at: new Date().toISOString(),
+    ...row,
+  }))
 }
 
 export async function createMatch(input: Partial<Match>): Promise<Match> {

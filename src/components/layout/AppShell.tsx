@@ -12,6 +12,7 @@ import {
   LogOut,
   Moon,
   Shield,
+  Settings,
   Sparkles,
   Sun,
   Trophy,
@@ -48,7 +49,10 @@ const tenantGroups = [
   },
   {
     label: 'Gestao',
-    items: [{ to: '/financeiro', label: 'Financeiro', icon: CircleDollarSign }],
+    items: [
+      { to: '/financeiro', label: 'Financeiro', icon: CircleDollarSign },
+      { to: '/configuracoes', label: 'Configuracoes', icon: Settings },
+    ],
   },
 ]
 

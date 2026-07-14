@@ -5,6 +5,9 @@ export type PlayerStatus = 'ATIVO' | 'INATIVO' | 'SUSPENSO'
 export type PlayerType = 'MENSALISTA' | 'AVULSO'
 export type Position = 'GOLEIRO' | 'LINHA' | 'Goleiro' | 'Linha'
 export type AttendanceStatus = 'CONVIDADO' | 'CONFIRMADO' | 'RECUSOU' | 'ESPERA' | 'COMPARECEU' | 'FALTOU'
+export type PaymentStatus = 'PENDENTE' | 'PAGO' | 'ATRASADO' | 'CANCELADO'
+export type FinanceTransactionKind = 'RECEITA' | 'DESPESA'
+export type FinanceTransactionStatus = 'CONFIRMADO' | 'PENDENTE' | 'CANCELADO'
 
 export type Profile = {
   id: string
@@ -158,5 +161,57 @@ export type PlayerStatRow = {
   present: boolean
   created_at: string
   player?: Pick<Player, 'id' | 'name' | 'primary_position' | 'photo_url'>
-  match?: Pick<Match, 'id' | 'scheduled_at' | 'team_a_name' | 'team_b_name'>
+  match?: Pick<Match, 'id' | 'scheduled_at' | 'team_a_name' | 'team_b_name' | 'team_results' | 'notes'>
+}
+
+export type Payment = {
+  id: string
+  tenant_id: string
+  player_id: string | null
+  match_id: string | null
+  provider: string
+  amount: number
+  due_date: string
+  paid_at: string | null
+  status: PaymentStatus
+  checkout_url: string | null
+  pix_code: string | null
+  created_at: string
+  player?: Pick<Player, 'id' | 'name' | 'whatsapp'>
+}
+
+export type FinanceTransaction = {
+  id: string
+  tenant_id: string
+  player_id: string | null
+  match_id: string | null
+  payment_id: string | null
+  kind: FinanceTransactionKind
+  category: string
+  description: string
+  amount: number
+  occurred_on: string
+  status: FinanceTransactionStatus
+  created_at: string
+  player?: Pick<Player, 'id' | 'name'>
+}
+
+export type ConfirmationSchedule = {
+  id: string
+  tenant_id: string
+  stage_number: number
+  days_before: number
+  send_time: string
+  enabled: boolean
+  created_at: string
+}
+
+export type BillingSettings = {
+  id: string
+  tenant_id: string
+  monthly_billing_day: number
+  default_provider: 'MANUAL_PIX' | 'ASAAS' | 'MERCADO_PAGO' | 'STONE' | 'VINDI'
+  auto_charge_casual_players: boolean
+  created_at: string
+  updated_at: string
 }
