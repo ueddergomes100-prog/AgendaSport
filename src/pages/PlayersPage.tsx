@@ -204,71 +204,9 @@ export function PlayersPage() {
             </div>
           </div>
 
-          <div className="hidden overflow-x-auto lg:block">
-            <table className="w-full min-w-[900px] border-collapse text-sm">
-              <thead className="bg-muted/80 text-left">
-                <tr>
-                  <th className="p-4">Participante</th>
-                  <th className="p-4">Mensalista</th>
-                  <th className="p-4">Nota</th>
-                  <th className="p-4">Posicao</th>
-                  <th className="p-4">Etapa</th>
-                  <th className="p-4">Status</th>
-                  <th className="p-4">WhatsApp</th>
-                  <th className="p-4 text-right">Acoes</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredPlayers.map((player) => (
-                  <tr key={player.id} className="border-t border-border transition hover:bg-muted/45 dark:border-slate-800">
-                    <td className="p-4">
-                      <div className="flex items-center gap-3">
-                        <PlayerAvatar player={player} />
-                        <div className="min-w-0">
-                          <p className="truncate font-black">{player.name}</p>
-                          <p className="text-xs text-muted-foreground">{player.notes || 'Sem observacoes'}</p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="p-4"><TypePill type={player.type} /></td>
-                    <td className="p-4">
-                      <div className="flex min-w-28 items-center gap-2">
-                        <span className="font-black">{player.technical_score}/10</span>
-                        <div className="h-2 flex-1 rounded-full bg-muted">
-                          <div className="h-full rounded-full bg-primary" style={{ width: `${Math.max(8, player.technical_score * 10)}%` }} />
-                        </div>
-                      </div>
-                    </td>
-                    <td className="p-4 font-semibold">{displayPosition(player.primary_position)}</td>
-                    <td className="p-4 font-black">Etapa {clampStage(player.confirmation_stage)}</td>
-                    <td className="p-4"><StatusPill status={player.status} /></td>
-                    <td className="p-4 text-muted-foreground">{player.whatsapp || '-'}</td>
-                    <td className="p-4">
-                      <div className="flex justify-end gap-2">
-                        <Button type="button" variant="ghost" className="size-9 p-0" onClick={() => openEditPlayer(player)} title="Editar participante">
-                          <Pencil size={16} />
-                        </Button>
-                        <Button type="button" variant="danger" className="size-9 p-0" onClick={() => removePlayer(player)} disabled={deletingId === player.id} title="Excluir participante">
-                          {deletingId === player.id ? <LoaderCircle className="animate-spin" size={16} /> : <Trash2 size={16} />}
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-                {!filteredPlayers.length && (
-                  <tr>
-                    <td colSpan={8} className="p-10">
-                      <EmptyRoster onCreate={openNewPlayer} hasSearch={Boolean(search.trim())} />
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="grid gap-3 p-4 lg:hidden">
+          <div className="grid gap-3 p-4">
             {filteredPlayers.map((player) => (
-              <PlayerMobileCard
+              <PlayerRosterCard
                 key={player.id}
                 player={player}
                 deleting={deletingId === player.id}
@@ -276,7 +214,11 @@ export function PlayersPage() {
                 onEdit={() => openEditPlayer(player)}
               />
             ))}
-            {!filteredPlayers.length && <EmptyRoster onCreate={openNewPlayer} hasSearch={Boolean(search.trim())} />}
+            {!filteredPlayers.length && (
+              <div className="py-6">
+                <EmptyRoster onCreate={openNewPlayer} hasSearch={Boolean(search.trim())} />
+              </div>
+            )}
           </div>
         </Card>
 
@@ -525,7 +467,7 @@ function PlayerAvatar({ player }: { player: Pick<Player, 'name' | 'primary_posit
 function TypePill({ type }: { type: Player['type'] }) {
   return (
     <span className={cn('rounded-full px-3 py-1 text-xs font-black', type === 'MENSALISTA' ? 'bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-100' : 'bg-yellow-100 text-yellow-900 dark:bg-yellow-900/50 dark:text-yellow-100')}>
-      {type === 'MENSALISTA' ? 'SIM' : 'NAO'}
+      {type === 'MENSALISTA' ? 'Mensalista' : 'Avulso'}
     </span>
   )
 }
@@ -539,32 +481,58 @@ function StatusPill({ status }: { status: Player['status'] }) {
   return <span className={cn('rounded-full px-3 py-1 text-xs font-black', styles[status])}>{status}</span>
 }
 
-function PlayerMobileCard({ player, deleting, onDelete, onEdit }: { player: Player; deleting: boolean; onDelete: () => void; onEdit: () => void }) {
+function PlayerRosterCard({ player, deleting, onDelete, onEdit }: { player: Player; deleting: boolean; onDelete: () => void; onEdit: () => void }) {
   return (
-    <div className="rounded-xl border border-border bg-white/70 p-4 dark:bg-slate-950/40">
-      <div className="flex items-start gap-3">
-        <PlayerAvatar player={player} />
-        <div className="min-w-0 flex-1">
-          <p className="truncate font-black">{player.name}</p>
-          <p className="text-sm text-muted-foreground">{displayPosition(player.primary_position)} - {player.technical_score}/10</p>
+    <div className="rounded-xl border border-border bg-white/75 p-4 shadow-sm transition hover:border-primary/35 hover:bg-green-50/35 dark:bg-slate-950/40 dark:hover:bg-green-950/15">
+      <div className="grid gap-4 xl:grid-cols-[minmax(240px,1.2fr)_minmax(170px,0.8fr)_minmax(170px,0.8fr)_auto] xl:items-center">
+        <div className="flex min-w-0 items-start gap-3">
+          <PlayerAvatar player={player} />
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="max-w-full break-words text-lg font-black leading-tight">{player.name}</p>
+              <StatusPill status={player.status} />
+            </div>
+            <p className="mt-1 break-words text-sm font-semibold text-muted-foreground">{player.whatsapp || 'Sem WhatsApp'}</p>
+            <p className="mt-1 line-clamp-2 break-words text-xs text-muted-foreground">{player.notes || 'Sem observacoes'}</p>
+          </div>
         </div>
-        <StatusPill status={player.status} />
+
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-1">
+          <InfoPill label="Funcao" value={displayPosition(player.primary_position)} />
+          <InfoPill label="Etapa" value={`Etapa ${clampStage(player.confirmation_stage)}`} />
+          <div className="flex items-center">{<TypePill type={player.type} />}</div>
+        </div>
+
+        <div>
+          <p className="text-xs font-black uppercase tracking-wide text-muted-foreground">Nota</p>
+          <div className="mt-2 flex items-center gap-3">
+            <span className="text-lg font-black">{player.technical_score}/10</span>
+            <div className="h-2 min-w-28 flex-1 rounded-full bg-muted">
+              <div className="h-full rounded-full bg-primary" style={{ width: `${Math.max(8, player.technical_score * 10)}%` }} />
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 xl:w-28 xl:grid-cols-1">
+          <Button type="button" variant="secondary" onClick={onEdit}>
+            <Pencil size={16} />
+            Editar
+          </Button>
+          <Button type="button" variant="danger" onClick={onDelete} disabled={deleting}>
+            {deleting ? <LoaderCircle className="animate-spin" size={16} /> : <Trash2 size={16} />}
+            Excluir
+          </Button>
+        </div>
       </div>
-      <div className="mt-4 flex flex-wrap gap-2">
-        <TypePill type={player.type} />
-        <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-black text-green-800 dark:bg-green-900/50 dark:text-green-100">Etapa {clampStage(player.confirmation_stage)}</span>
-        <span className="rounded-full bg-muted px-3 py-1 text-xs font-black text-muted-foreground">{player.whatsapp || 'Sem WhatsApp'}</span>
-      </div>
-      <div className="mt-4 grid grid-cols-2 gap-2">
-        <Button type="button" variant="secondary" onClick={onEdit}>
-          <Pencil size={16} />
-          Editar
-        </Button>
-        <Button type="button" variant="danger" onClick={onDelete} disabled={deleting}>
-          {deleting ? <LoaderCircle className="animate-spin" size={16} /> : <Trash2 size={16} />}
-          Excluir
-        </Button>
-      </div>
+    </div>
+  )
+}
+
+function InfoPill({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg bg-muted/70 px-3 py-2">
+      <p className="text-[10px] font-black uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className="mt-0.5 break-words text-sm font-black">{value}</p>
     </div>
   )
 }
