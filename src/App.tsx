@@ -18,6 +18,7 @@ import { PickupsPage } from './pages/PickupsPage'
 import { PlayersPage } from './pages/PlayersPage'
 import { PortalPage } from './pages/PortalPage'
 import { PublicRegistrationPage } from './pages/PublicRegistrationPage'
+import { ResetPasswordPage } from './pages/ResetPasswordPage'
 import { SchedulePage } from './pages/SchedulePage'
 import { SettingsPage } from './pages/SettingsPage'
 import { StatsPage } from './pages/StatsPage'
@@ -66,6 +67,7 @@ export default function App() {
     <ErrorBoundary>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/redefinir-senha" element={<ResetPasswordPage />} />
         <Route path="/portal" element={<PortalPage />} />
         <Route path="/inscricao/:token" element={<PublicRegistrationPage />} />
         <Route element={<ProtectedApp />}>
