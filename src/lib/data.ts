@@ -330,6 +330,9 @@ export async function saveConfirmationSchedules(rows: Array<Pick<ConfirmationSch
     enabled: row.enabled,
   }))
   const { error } = await supabase.from('confirmation_schedules').upsert(payload, { onConflict: 'tenant_id,stage_number' })
+  if (error && isMissingRelationError(error.message, 'confirmation_schedules')) {
+    throw new Error('A tabela de etapas de convocacao ainda nao existe no Supabase. Rode o patch SQL de producao e tente novamente.')
+  }
   if (error) throw error
 }
 

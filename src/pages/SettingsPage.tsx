@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { BellRing, CreditCard, LoaderCircle, Save, Settings, SlidersHorizontal } from 'lucide-react'
+import { BellRing, CreditCard, LoaderCircle, Plus, Save, Settings, SlidersHorizontal, Trash2 } from 'lucide-react'
 import { Button } from '../components/ui/button'
 import { Card, CardTitle } from '../components/ui/card'
 import { Field, Input, Select } from '../components/ui/field'
@@ -57,9 +57,24 @@ export function SettingsPage() {
 
   const scheduleRows = scheduleDraft ?? savedScheduleRows
   const billingForm = billingDraft ?? savedBillingForm
+  const activeScheduleRows = scheduleRows.filter((row) => row.enabled)
+  const nextDisabledSchedule = scheduleRows.find((row) => !row.enabled)
 
   function updateSchedule(stageNumber: number, patch: Partial<EditableSchedule>) {
     setScheduleDraft(scheduleRows.map((row) => row.stage_number === stageNumber ? { ...row, ...patch } : row))
+  }
+
+  function removeSchedule(stageNumber: number) {
+    if (activeScheduleRows.length <= 2) {
+      setFeedback('Mantenha pelo menos 2 etapas de convocacao ativas.')
+      return
+    }
+    updateSchedule(stageNumber, { enabled: false })
+  }
+
+  function addNextSchedule() {
+    if (!nextDisabledSchedule) return
+    updateSchedule(nextDisabledSchedule.stage_number, { enabled: true })
   }
 
   async function submitSchedules(event: React.FormEvent<HTMLFormElement>) {
@@ -129,12 +144,11 @@ export function SettingsPage() {
           </div>
 
           <form className="mt-5 grid gap-3" onSubmit={submitSchedules}>
-            {scheduleRows.map((row) => (
-              <div key={row.stage_number} className="grid gap-3 rounded-xl border border-border bg-white/70 p-3 dark:bg-slate-950/40 md:grid-cols-[130px_1fr_1fr_120px] md:items-end">
+            {activeScheduleRows.map((row) => (
+              <div key={row.stage_number} className="grid gap-3 rounded-xl border border-border bg-white/70 p-3 dark:bg-slate-950/40 md:grid-cols-[130px_1fr_1fr_140px] md:items-end">
                 <div>
                   <p className="text-xs font-black uppercase tracking-wide text-muted-foreground">Etapa</p>
                   <p className="mt-2 text-lg font-black">{row.stage_number}</p>
-                  {!row.enabled && <p className="text-xs font-semibold text-muted-foreground">Removida</p>}
                 </div>
                 <Field label="Dias antes">
                   <Input
@@ -152,22 +166,31 @@ export function SettingsPage() {
                     onChange={(event) => updateSchedule(row.stage_number, { send_time: event.target.value })}
                   />
                 </Field>
-                <label className="flex min-h-12 items-center justify-center gap-2 rounded-lg bg-muted px-3 py-2 text-sm font-black">
-                  <input
-                    type="checkbox"
-                    className="size-5 accent-green-700"
-                    checked={row.enabled}
-                    onChange={(event) => updateSchedule(row.stage_number, { enabled: event.currentTarget.checked })}
-                  />
-                  {row.enabled ? 'Ativa' : 'Inativa'}
-                </label>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="min-h-12"
+                  disabled={activeScheduleRows.length <= 2}
+                  onClick={() => removeSchedule(row.stage_number)}
+                >
+                  <Trash2 size={16} />
+                  Remover
+                </Button>
               </div>
             ))}
 
-            <Button className="min-h-12 w-full sm:w-fit" disabled={savingSchedules || schedules.isLoading}>
-              {savingSchedules ? <LoaderCircle className="animate-spin" size={16} /> : <Save size={16} />}
-              {savingSchedules ? 'Salvando...' : 'Salvar convocacoes'}
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              {nextDisabledSchedule && (
+                <Button type="button" variant="secondary" className="min-h-12" onClick={addNextSchedule}>
+                  <Plus size={16} />
+                  Adicionar etapa {nextDisabledSchedule.stage_number}
+                </Button>
+              )}
+              <Button className="min-h-12 w-full sm:w-fit" disabled={savingSchedules || schedules.isLoading}>
+                {savingSchedules ? <LoaderCircle className="animate-spin" size={16} /> : <Save size={16} />}
+                {savingSchedules ? 'Salvando...' : 'Salvar convocacoes'}
+              </Button>
+            </div>
           </form>
         </Card>
 

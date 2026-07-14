@@ -30,6 +30,39 @@ where confirmation_stage is null;
 create index if not exists players_tenant_confirmation_stage_idx
 on public.players(tenant_id, confirmation_stage);
 
+create table if not exists public.confirmation_schedules (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references public.companies(id) on delete cascade,
+  stage_number integer not null check (stage_number between 1 and 5),
+  days_before integer not null default 0 check (days_before between 0 and 30),
+  send_time time not null,
+  enabled boolean not null default true,
+  created_at timestamptz not null default now(),
+  unique (tenant_id, stage_number)
+);
+
+create index if not exists confirmation_schedules_tenant_idx
+on public.confirmation_schedules(tenant_id, stage_number);
+
+alter table public.confirmation_schedules enable row level security;
+
+drop policy if exists "confirmation schedules tenant" on public.confirmation_schedules;
+create policy "confirmation schedules tenant" on public.confirmation_schedules
+for all
+using (tenant_id = current_tenant_id() or is_super_admin())
+with check (tenant_id = current_tenant_id() or is_super_admin());
+
+insert into public.confirmation_schedules (tenant_id, stage_number, days_before, send_time, enabled)
+select id, stage.stage_number, stage.days_before, stage.send_time::time, true
+from public.companies
+cross join (values
+  (1, 2, '16:00'),
+  (2, 2, '18:00'),
+  (3, 1, '10:00'),
+  (4, 0, '09:00')
+) as stage(stage_number, days_before, send_time)
+on conflict (tenant_id, stage_number) do nothing;
+
 create index if not exists message_logs_match_template_idx
 on public.message_logs(match_id, type, template);
 
@@ -116,3 +149,5 @@ begin
   return jsonb_build_object('status', v_final_status, 'queue_position', v_queue_position);
 end;
 $$;
+
+notify pgrst, 'reload schema';
