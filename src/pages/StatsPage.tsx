@@ -4,16 +4,17 @@ import { CalendarDays, CheckCircle2, ClipboardList, Copy, Download, Medal, Messa
 import { Button } from '../components/ui/button'
 import { Card } from '../components/ui/card'
 import { AnimatedPage } from '../components/ui/sport'
-import { getCurrentCompany, getPlayerStats } from '../lib/data'
+import { getCompletedMatchSheets, getCurrentCompany } from '../lib/data'
 import { displayPosition } from '../lib/positions'
 import { usePrimaryStatLabel } from '../lib/stats-labels'
-import type { MatchTeamResult, PlayerStatRow } from '../lib/types'
+import type { CompletedMatchSheet, MatchTeamResult, PlayerStatRow } from '../lib/types'
 
 type MatchSummary = {
   matchId: string
   scheduledAt: string
   title: string
   rows: PlayerStatRow[]
+  hasSavedStats: boolean
 }
 
 function aggregate(rows: PlayerStatRow[]) {
@@ -45,10 +46,10 @@ function aggregate(rows: PlayerStatRow[]) {
 export function StatsPage() {
   const [selectedMatchId, setSelectedMatchId] = useState('')
   const primaryStat = usePrimaryStatLabel()
-  const stats = useQuery({ queryKey: ['player-stats'], queryFn: getPlayerStats })
+  const sheets = useQuery({ queryKey: ['completed-match-sheets'], queryFn: getCompletedMatchSheets })
   const company = useQuery({ queryKey: ['current-company'], queryFn: getCurrentCompany })
 
-  const events = useMemo(() => buildMatchSummaries(stats.data ?? []), [stats.data])
+  const events = useMemo(() => buildMatchSummaries(sheets.data ?? []), [sheets.data])
   const selectedEvent = events.find((event) => event.matchId === selectedMatchId) ?? events[0] ?? null
   const rows = useMemo(() => selectedEvent?.rows ?? [], [selectedEvent])
   const presentRows = useMemo(() => rows.filter((row) => row.present).sort(comparePlayerRows), [rows])
@@ -95,7 +96,7 @@ export function StatsPage() {
             <span className="page-kicker"><Trophy size={14} /> Sumulas finalizadas</span>
             <h1 className="mt-4 max-w-3xl text-3xl font-black tracking-tight md:text-4xl">Escolha um evento e veja a sumula</h1>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">
-              Aqui aparecem somente eventos que ja tiveram estatisticas lancadas.
+              Aqui aparecem os eventos encerrados. Se a estatistica individual ainda nao foi salva, a sumula abre com a presenca real e os numeros zerados.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -131,6 +132,9 @@ export function StatsPage() {
                 >
                   <p className="font-black">{event.title}</p>
                   <p className="mt-1 text-sm text-muted-foreground">{formatDate(event.scheduledAt)} as {formatTime(event.scheduledAt)}</p>
+                  {!event.hasSavedStats && (
+                    <p className="mt-2 rounded-lg bg-amber-100 px-2 py-1 text-xs font-black text-amber-900">Somente presenca</p>
+                  )}
                   <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs font-black">
                     <span className="rounded-lg bg-green-100 px-2 py-1 text-green-800">{event.rows.filter((row) => row.present).length} pres.</span>
                     <span className="rounded-lg bg-red-100 px-2 py-1 text-red-800">{event.rows.filter((row) => !row.present).length} aus.</span>
@@ -160,6 +164,7 @@ export function StatsPage() {
             totalAssists={totalAssists}
             teamResults={teamResults}
             teamWinner={teamWinner}
+            hasSavedStats={selectedEvent.hasSavedStats}
             statPlural={primaryStat.labels.plural}
             statLower={primaryStat.labels.lowerPlural}
             copyReportToWhatsApp={copyReportToWhatsApp}
@@ -168,7 +173,7 @@ export function StatsPage() {
           <Card className="grid min-h-96 place-items-center p-10 text-center">
             <ClipboardList className="text-primary" size={40} />
             <h2 className="mt-4 text-2xl font-black">Nenhuma sumula encontrada</h2>
-            <p className="mt-2 max-w-md text-sm text-muted-foreground">Finalize um evento e salve as estatisticas para que a sumula apareca aqui.</p>
+            <p className="mt-2 max-w-md text-sm text-muted-foreground">Finalize um evento para que a sumula apareca aqui.</p>
           </Card>
         )}
       </div>
@@ -188,6 +193,7 @@ function MatchSheet({
   totalAssists,
   teamResults,
   teamWinner,
+  hasSavedStats,
   statPlural,
   statLower,
   copyReportToWhatsApp,
@@ -203,6 +209,7 @@ function MatchSheet({
   totalAssists: number
   teamResults: MatchTeamResult[]
   teamWinner: MatchTeamResult | null
+  hasSavedStats: boolean
   statPlural: string
   statLower: string
   copyReportToWhatsApp: () => Promise<void>
@@ -225,6 +232,12 @@ function MatchSheet({
           <ReportMeta icon={<Trophy size={22} />} label="Presentes" value={`${presentRows.length}`} />
         </div>
       </div>
+
+      {!hasSavedStats && (
+        <div className="mx-4 mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-950 sm:mx-5">
+          Este evento esta encerrado, mas ainda nao tem estatisticas individuais salvas. A sumula abaixo foi montada pela presenca real; {statLower} e assistencias aparecem zerados.
+        </div>
+      )}
 
       <div className="grid gap-4 p-4 sm:p-5 xl:grid-cols-[1fr_1fr]">
         <PresenceTable title="Quem compareceu" tone="present" rows={presentRows} />
@@ -427,21 +440,15 @@ function EmptyStats({ text = 'Ainda nao ha estatisticas lancadas neste evento.' 
   return <p className="rounded-xl border border-dashed border-border p-5 text-center text-sm text-muted-foreground">{text}</p>
 }
 
-function buildMatchSummaries(rows: PlayerStatRow[]): MatchSummary[] {
-  const map = new Map<string, MatchSummary>()
-  rows.forEach((row) => {
-    if (!row.match) return
-    const current = map.get(row.match_id) ?? {
-      matchId: row.match_id,
-      scheduledAt: row.match.scheduled_at,
-      title: row.match.notes?.replace(/^Agenda automatica:\s*/i, '').trim() || 'Evento esportivo',
-      rows: [],
-    }
-    current.rows.push(row)
-    map.set(row.match_id, current)
-  })
-
-  return [...map.values()]
+function buildMatchSummaries(sheets: CompletedMatchSheet[]): MatchSummary[] {
+  return sheets
+    .map((sheet) => ({
+      matchId: sheet.match.id,
+      scheduledAt: sheet.match.scheduled_at,
+      title: sheet.match.notes?.replace(/^Agenda automatica:\s*/i, '').trim() || 'Evento esportivo',
+      rows: sheet.rows,
+      hasSavedStats: sheet.hasSavedStats,
+    }))
     .filter((event) => event.rows.length > 0)
     .sort((left, right) => new Date(right.scheduledAt).getTime() - new Date(left.scheduledAt).getTime())
 }

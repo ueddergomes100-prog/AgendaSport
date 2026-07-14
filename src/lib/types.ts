@@ -164,6 +164,12 @@ export type PlayerStatRow = {
   match?: Pick<Match, 'id' | 'scheduled_at' | 'team_a_name' | 'team_b_name' | 'team_results' | 'notes'>
 }
 
+export type CompletedMatchSheet = {
+  match: Match
+  rows: PlayerStatRow[]
+  hasSavedStats: boolean
+}
+
 export type Payment = {
   id: string
   tenant_id: string

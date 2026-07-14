@@ -4,6 +4,7 @@ import type {
   Attendance,
   BillingSettings,
   Company,
+  CompletedMatchSheet,
   ConfirmationSchedule,
   DashboardStats,
   FinanceTransaction,
@@ -92,6 +93,57 @@ export async function getPlayerStats(): Promise<PlayerStatRow[]> {
   return data ?? []
 }
 
+export async function getCompletedMatchSheets(): Promise<CompletedMatchSheet[]> {
+  const matches = (await getMatches()).filter((match) => match.status === 'ENCERRADA')
+  const matchIds = matches.map((match) => match.id)
+  if (!matchIds.length) return []
+
+  const { data: statsData, error: statsError } = await supabase
+    .from('match_player_stats')
+    .select('*, player:players(id, name, primary_position, photo_url), match:matches(id, scheduled_at, team_a_name, team_b_name, team_results, notes)')
+    .in('match_id', matchIds)
+    .order('created_at', { ascending: false })
+  if (statsError) throw statsError
+
+  const { data: attendanceData, error: attendanceError } = await supabase
+    .from('attendance')
+    .select('*, player:players(id, name, primary_position, photo_url)')
+    .in('match_id', matchIds)
+  if (attendanceError) throw attendanceError
+
+  const stats = (statsData ?? []) as PlayerStatRow[]
+  const attendance = (attendanceData ?? []) as Array<Attendance & { player?: Pick<Player, 'id' | 'name' | 'primary_position' | 'photo_url'> }>
+  const statsByMatch = groupBy(stats, (row) => row.match_id)
+  const attendanceByMatch = groupBy(attendance, (row) => row.match_id)
+
+  return matches.map((match) => {
+    const savedRows = statsByMatch.get(match.id) ?? []
+    const savedByPlayer = new Map(savedRows.map((row) => [row.player_id, row]))
+    const consumedStats = new Set<string>()
+
+    const rowsFromAttendance = (attendanceByMatch.get(match.id) ?? []).map((attendanceRow) => {
+      const saved = savedByPlayer.get(attendanceRow.player_id)
+      if (saved) {
+        consumedStats.add(saved.player_id)
+        return saved
+      }
+
+      return createStatsRowFromAttendance(match, attendanceRow)
+    })
+
+    const rowsOnlyInStats = savedRows.filter((row) => !consumedStats.has(row.player_id))
+    const rows = [...rowsFromAttendance, ...rowsOnlyInStats].sort((left, right) =>
+      (left.player?.name ?? '').localeCompare(right.player?.name ?? '', 'pt-BR', { sensitivity: 'base' }),
+    )
+
+    return {
+      match,
+      rows,
+      hasSavedStats: savedRows.length > 0,
+    }
+  })
+}
+
 export async function getMatchPlayerStats(matchId: string): Promise<PlayerStatRow[]> {
   const { data, error } = await supabase
     .from('match_player_stats')
@@ -100,6 +152,45 @@ export async function getMatchPlayerStats(matchId: string): Promise<PlayerStatRo
     .order('created_at', { ascending: false })
   if (error) throw error
   return data ?? []
+}
+
+function createStatsRowFromAttendance(
+  match: Match,
+  attendance: Attendance & { player?: Pick<Player, 'id' | 'name' | 'primary_position' | 'photo_url'> },
+): PlayerStatRow {
+  return {
+    id: `attendance-${attendance.id}`,
+    tenant_id: attendance.tenant_id,
+    match_id: match.id,
+    player_id: attendance.player_id,
+    goals: 0,
+    assists: 0,
+    wins: 0,
+    draws: 0,
+    losses: 0,
+    present: attendance.status === 'COMPARECEU' || attendance.status === 'CONFIRMADO',
+    created_at: attendance.responded_at ?? match.scheduled_at,
+    player: attendance.player,
+    match: {
+      id: match.id,
+      scheduled_at: match.scheduled_at,
+      team_a_name: match.team_a_name,
+      team_b_name: match.team_b_name,
+      team_results: match.team_results,
+      notes: match.notes,
+    },
+  }
+}
+
+function groupBy<T, K>(items: T[], keyGetter: (item: T) => K) {
+  const map = new Map<K, T[]>()
+  items.forEach((item) => {
+    const key = keyGetter(item)
+    const group = map.get(key) ?? []
+    group.push(item)
+    map.set(key, group)
+  })
+  return map
 }
 
 export async function getLatestTeamDraw(matchId: string): Promise<TeamDrawRecord | null> {
