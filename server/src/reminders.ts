@@ -53,6 +53,7 @@ type AttendanceRow = {
     status: string
     type: string
     primary_position: string
+    confirmation_stage?: number | null
   } | null
 }
 
@@ -172,10 +173,19 @@ async function openMatchIfScheduled(match: MatchRow) {
 async function getPendingAttendance(matchId: string) {
   const { data, error } = await adminSupabase
     .from('attendance')
-    .select('id, tenant_id, match_id, player_id, status, player:players(id, name, whatsapp, status, type, primary_position)')
+    .select('id, tenant_id, match_id, player_id, status, player:players(id, name, whatsapp, status, type, primary_position, confirmation_stage)')
     .eq('match_id', matchId)
     .eq('status', 'CONVIDADO')
 
+  if (error && isMissingConfirmationStageColumnError(error.message)) {
+    const { data: legacyData, error: legacyError } = await adminSupabase
+      .from('attendance')
+      .select('id, tenant_id, match_id, player_id, status, player:players(id, name, whatsapp, status, type, primary_position)')
+      .eq('match_id', matchId)
+      .eq('status', 'CONVIDADO')
+    if (legacyError) throw legacyError
+    return (legacyData ?? []) as unknown as AttendanceRow[]
+  }
   if (error) throw error
   return (data ?? []) as unknown as AttendanceRow[]
 }
@@ -314,6 +324,21 @@ function isMissingScheduleTableError(message: string) {
   return message.includes('confirmation_schedules') && (message.includes('schema cache') || message.includes('does not exist') || message.includes('relation'))
 }
 
+function isMissingConfirmationStageColumnError(message: string) {
+  return message.includes('confirmation_stage') && (message.includes('column') || message.includes('schema cache'))
+}
+
+function getAttendanceStage(attendance: AttendanceRow) {
+  const parsed = Number(attendance.player?.confirmation_stage ?? 1)
+  if (!Number.isFinite(parsed)) return 1
+  return Math.max(1, Math.min(5, Math.trunc(parsed)))
+}
+
+function getStageForAttendance(schedules: ReminderStage[], attendance: AttendanceRow) {
+  const stageNumber = getAttendanceStage(attendance)
+  return schedules.find((stage) => stage.stageNumber === stageNumber) ?? schedules[0] ?? confirmationReminderStages[0]
+}
+
 function normalizePhone(value: string) {
   const digits = value.replace(/\D/g, '')
   return digits.startsWith('55') ? digits.slice(2) : digits
@@ -373,6 +398,8 @@ export async function runConfirmationReminderJob(options: { tenantId?: string | 
         const alreadySent = await getAlreadySentPlayerIds(match.id, stage.template)
 
         for (const attendance of pendingAttendance) {
+          if (getAttendanceStage(attendance) !== stage.stageNumber) continue
+
           if (attendance.player?.status !== 'ATIVO') {
             summary.skippedWithoutWhatsapp += 1
             continue
@@ -452,6 +479,7 @@ export async function sendConfirmationForMatch(matchId: string, tenantId?: strin
 
   summary.invitationsCreated = await ensureInvitations(match)
   const pendingAttendance = await getPendingAttendance(match.id)
+  const schedules = await getConfirmationSchedules(match.tenant_id)
 
   for (const attendance of pendingAttendance) {
     if (attendance.player?.status !== 'ATIVO') {
@@ -466,7 +494,8 @@ export async function sendConfirmationForMatch(matchId: string, tenantId?: strin
     }
 
     try {
-      const message = buildConfirmationMessage(match, attendance, confirmationReminderStages[0])
+      const stage = getStageForAttendance(schedules, attendance)
+      const message = buildConfirmationMessage(match, attendance, stage)
       await sendWhatsAppMessage({
         tenant_id: match.tenant_id,
         match_id: match.id,
@@ -476,7 +505,11 @@ export async function sendConfirmationForMatch(matchId: string, tenantId?: strin
         template,
         message,
         metadata: {
-          stage: 'manual',
+          stage: stage.label,
+          stage_number: stage.stageNumber,
+          days_before: stage.daysBefore,
+          send_time: stage.sendTime,
+          manual_send: true,
           scheduled_at: match.scheduled_at,
           pickup_id: match.pickup_id,
           template_parameters: buildConfirmationTemplateParameters(match, attendance),

@@ -422,6 +422,11 @@ export async function createPlayer(input: Partial<Player>) {
   const tenantId = profile.tenant_id!
   const payload = await preparePlayerPayload(input, tenantId)
   const { error } = await supabase.from('players').insert({ ...payload, tenant_id: tenantId })
+  if (error && isMissingColumnError(error.message, 'confirmation_stage')) {
+    const { error: legacyError } = await supabase.from('players').insert({ ...withoutConfirmationStage(payload), tenant_id: tenantId })
+    if (legacyError) throw legacyError
+    return
+  }
   if (error) throw error
 }
 
@@ -430,6 +435,11 @@ export async function updatePlayer(id: string, input: Partial<Player>) {
   const tenantId = profile.tenant_id!
   const payload = await preparePlayerPayload(input, tenantId, id)
   const { error } = await supabase.from('players').update(payload).eq('id', id)
+  if (error && isMissingColumnError(error.message, 'confirmation_stage')) {
+    const { error: legacyError } = await supabase.from('players').update(withoutConfirmationStage(payload)).eq('id', id)
+    if (legacyError) throw legacyError
+    return
+  }
   if (error) throw error
 }
 
@@ -452,12 +462,25 @@ async function preparePlayerPayload(input: Partial<Player>, tenantId: string, cu
     name: `${firstName} ${lastName}`.trim(),
     whatsapp,
     whatsapp_normalized: normalized,
+    confirmation_stage: clampConfirmationStage(input.confirmation_stage),
     primary_position: toDbPosition(input.primary_position),
     status,
     suspended_at: status === 'SUSPENSO' ? (input.suspended_at ?? new Date().toISOString()) : null,
     suspension_reason: status === 'SUSPENSO' ? (input.suspension_reason ?? input.notes ?? null) : null,
     suspended_until: status === 'SUSPENSO' ? (input.suspended_until ?? null) : null,
   }
+}
+
+function clampConfirmationStage(value: unknown) {
+  const parsed = Number(value ?? 1)
+  if (!Number.isFinite(parsed)) return 1
+  return Math.max(1, Math.min(5, Math.trunc(parsed)))
+}
+
+function withoutConfirmationStage<T extends { confirmation_stage?: unknown }>(payload: T) {
+  const { confirmation_stage: _confirmationStage, ...legacyPayload } = payload
+  void _confirmationStage
+  return legacyPayload
 }
 
 async function assertUniquePlayerPhone(tenantId: string, normalized: string, currentPlayerId?: string) {

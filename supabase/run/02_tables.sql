@@ -65,6 +65,7 @@ create table players (
   technical_score integer not null check (technical_score between 1 and 10),
   primary_position player_position not null,
   secondary_position player_position,
+  confirmation_stage integer not null default 1 check (confirmation_stage between 1 and 5),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (tenant_id, email)

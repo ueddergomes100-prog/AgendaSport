@@ -50,6 +50,7 @@ export type Player = {
   suspended_until: string | null
   suspended_at: string | null
   whatsapp_normalized: string | null
+  confirmation_stage: number | null
   type: PlayerType
   technical_score: number
   primary_position: Position

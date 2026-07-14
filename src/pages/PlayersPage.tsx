@@ -5,9 +5,9 @@ import { Card, CardTitle } from '../components/ui/card'
 import { Field, Input, Select, Textarea } from '../components/ui/field'
 import { Button } from '../components/ui/button'
 import { AnimatedPage, PremiumModal } from '../components/ui/sport'
-import { createPlayer, deletePlayer, getCurrentCompany, getPlayers, updatePlayer } from '../lib/data'
+import { createPlayer, deletePlayer, getConfirmationSchedules, getCurrentCompany, getPlayers, updatePlayer } from '../lib/data'
 import { displayPosition, isGoalkeeperPosition, positionOptions } from '../lib/positions'
-import type { Company, Player, Position } from '../lib/types'
+import type { Company, ConfirmationSchedule, Player, Position } from '../lib/types'
 import { cn, getErrorMessage } from '../lib/utils'
 
 const positions: Position[] = positionOptions
@@ -15,12 +15,14 @@ const positions: Position[] = positionOptions
 export function PlayersPage() {
   const players = useQuery({ queryKey: ['players'], queryFn: getPlayers })
   const company = useQuery({ queryKey: ['current-company'], queryFn: getCurrentCompany })
+  const schedules = useQuery({ queryKey: ['confirmation-schedules'], queryFn: getConfirmationSchedules })
   const [saving, setSaving] = useState(false)
   const [deletingId, setDeletingId] = useState('')
   const [feedback, setFeedback] = useState('')
   const [search, setSearch] = useState('')
   const [showForm, setShowForm] = useState(false)
   const [editingPlayer, setEditingPlayer] = useState<Player | null>(null)
+  const [selectedStage, setSelectedStage] = useState(1)
   const formOpen = showForm || Boolean(editingPlayer)
 
   const roster = useMemo(() => players.data ?? [], [players.data])
@@ -39,6 +41,8 @@ export function PlayersPage() {
   const goalkeepers = roster.filter((player) => isGoalkeeperPosition(player.primary_position)).length
   const linePlayers = roster.length - goalkeepers
   const topPlayer = [...roster].sort((a, b) => b.technical_score - a.technical_score)[0]
+  const scheduleRows = useMemo(() => normalizeScheduleRows(schedules.data ?? []), [schedules.data])
+  const selectedSchedule = scheduleRows.find((row) => row.stage_number === selectedStage)
 
   useEffect(() => {
     if (!formOpen) return
@@ -51,7 +55,15 @@ export function PlayersPage() {
 
   function openNewPlayer() {
     setEditingPlayer(null)
+    setSelectedStage(1)
     setShowForm(true)
+    setFeedback('')
+  }
+
+  function openEditPlayer(player: Player) {
+    setEditingPlayer(player)
+    setSelectedStage(clampStage(player.confirmation_stage))
+    setShowForm(false)
     setFeedback('')
   }
 
@@ -81,6 +93,7 @@ export function PlayersPage() {
         technical_score: Number(form.get('technical_score')),
         primary_position: String(form.get('primary_position')) as Position,
         secondary_position: null,
+        confirmation_stage: Number(form.get('confirmation_stage') || 1),
         notes: String(form.get('notes') || '').trim(),
       }
 
@@ -199,6 +212,7 @@ export function PlayersPage() {
                   <th className="p-4">Mensalista</th>
                   <th className="p-4">Nota</th>
                   <th className="p-4">Posicao</th>
+                  <th className="p-4">Etapa</th>
                   <th className="p-4">Status</th>
                   <th className="p-4">WhatsApp</th>
                   <th className="p-4 text-right">Acoes</th>
@@ -226,11 +240,12 @@ export function PlayersPage() {
                       </div>
                     </td>
                     <td className="p-4 font-semibold">{displayPosition(player.primary_position)}</td>
+                    <td className="p-4 font-black">Etapa {clampStage(player.confirmation_stage)}</td>
                     <td className="p-4"><StatusPill status={player.status} /></td>
                     <td className="p-4 text-muted-foreground">{player.whatsapp || '-'}</td>
                     <td className="p-4">
                       <div className="flex justify-end gap-2">
-                        <Button type="button" variant="ghost" className="size-9 p-0" onClick={() => { setEditingPlayer(player); setShowForm(false); setFeedback('') }} title="Editar participante">
+                        <Button type="button" variant="ghost" className="size-9 p-0" onClick={() => openEditPlayer(player)} title="Editar participante">
                           <Pencil size={16} />
                         </Button>
                         <Button type="button" variant="danger" className="size-9 p-0" onClick={() => removePlayer(player)} disabled={deletingId === player.id} title="Excluir participante">
@@ -242,7 +257,7 @@ export function PlayersPage() {
                 ))}
                 {!filteredPlayers.length && (
                   <tr>
-                    <td colSpan={7} className="p-10">
+                    <td colSpan={8} className="p-10">
                       <EmptyRoster onCreate={openNewPlayer} hasSearch={Boolean(search.trim())} />
                     </td>
                   </tr>
@@ -258,7 +273,7 @@ export function PlayersPage() {
                 player={player}
                 deleting={deletingId === player.id}
                 onDelete={() => removePlayer(player)}
-                onEdit={() => { setEditingPlayer(player); setShowForm(false); setFeedback('') }}
+                onEdit={() => openEditPlayer(player)}
               />
             ))}
             {!filteredPlayers.length && <EmptyRoster onCreate={openNewPlayer} hasSearch={Boolean(search.trim())} />}
@@ -332,9 +347,22 @@ export function PlayersPage() {
                   <option value="SUSPENSO">Suspenso</option>
                 </Select>
               </Field>
+              <Field label="Etapa da convocacao">
+                <Select name="confirmation_stage" value={selectedStage} onChange={(event) => setSelectedStage(clampStage(event.target.value))}>
+                  {scheduleRows.map((row) => (
+                    <option key={row.stage_number} value={row.stage_number}>
+                      Etapa {row.stage_number}{row.enabled ? '' : ' - inativa'}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
             </div>
               )
             })()}
+
+            <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-semibold text-green-950 dark:border-green-900/50 dark:bg-green-950/30 dark:text-green-100">
+              {formatStagePreview(selectedSchedule)}
+            </div>
 
             <label className="flex min-h-11 items-center gap-3 rounded-md border border-border bg-white px-3 text-sm font-semibold text-slate-700 dark:bg-slate-900 dark:text-slate-200">
               <input name="mensalista" type="checkbox" defaultChecked={editingPlayer?.type === 'MENSALISTA'} className="size-4 accent-green-700" />
@@ -435,6 +463,43 @@ function getNameParts(player: Player | null) {
   return { firstName: first, lastName: rest.join(' ') }
 }
 
+function clampStage(value: unknown) {
+  const parsed = Number(value ?? 1)
+  if (!Number.isFinite(parsed)) return 1
+  return Math.max(1, Math.min(5, Math.trunc(parsed)))
+}
+
+function normalizeScheduleRows(rows: ConfirmationSchedule[]) {
+  const saved = new Map(rows.map((row) => [row.stage_number, row]))
+  return [1, 2, 3, 4, 5].map((stageNumber) => {
+    const row = saved.get(stageNumber)
+    return {
+      stage_number: stageNumber,
+      days_before: row?.days_before ?? defaultStageDays(stageNumber),
+      send_time: String(row?.send_time ?? defaultStageTime(stageNumber)).slice(0, 5),
+      enabled: row?.enabled ?? stageNumber < 5,
+    }
+  })
+}
+
+function defaultStageDays(stageNumber: number) {
+  if (stageNumber <= 2) return 2
+  if (stageNumber === 3) return 1
+  return 0
+}
+
+function defaultStageTime(stageNumber: number) {
+  const defaults = ['16:00', '18:00', '10:00', '09:00', '12:00']
+  return defaults[stageNumber - 1] ?? '16:00'
+}
+
+function formatStagePreview(stage?: Pick<ConfirmationSchedule, 'stage_number' | 'days_before' | 'send_time' | 'enabled'>) {
+  if (!stage) return 'Selecione uma etapa para ver quando este participante sera notificado.'
+  if (!stage.enabled) return `Etapa ${stage.stage_number} esta inativa nas configuracoes. Este participante nao recebera convocacao automatica por essa etapa.`
+  const dayText = stage.days_before === 0 ? 'no dia do evento' : `${stage.days_before} dia${stage.days_before === 1 ? '' : 's'} antes do evento`
+  return `Este participante sera notificado na etapa ${stage.stage_number}: ${dayText}, as ${String(stage.send_time).slice(0, 5)}.`
+}
+
 function RosterStat({ icon, label, value }: { icon: React.ReactNode; label: string; value: number }) {
   return (
     <div className="rounded-xl border border-border bg-white/76 px-4 py-3 shadow-sm dark:bg-slate-950/50">
@@ -487,6 +552,7 @@ function PlayerMobileCard({ player, deleting, onDelete, onEdit }: { player: Play
       </div>
       <div className="mt-4 flex flex-wrap gap-2">
         <TypePill type={player.type} />
+        <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-black text-green-800 dark:bg-green-900/50 dark:text-green-100">Etapa {clampStage(player.confirmation_stage)}</span>
         <span className="rounded-full bg-muted px-3 py-1 text-xs font-black text-muted-foreground">{player.whatsapp || 'Sem WhatsApp'}</span>
       </div>
       <div className="mt-4 grid grid-cols-2 gap-2">
