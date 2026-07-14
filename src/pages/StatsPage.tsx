@@ -1,32 +1,39 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Award, CalendarDays, ClipboardList, Copy, Download, Handshake, Medal, MessageCircle, Trophy } from 'lucide-react'
+import { Award, CalendarDays, CheckCircle2, ClipboardList, Copy, Download, Handshake, Medal, MessageCircle, Trophy, XCircle } from 'lucide-react'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Button } from '../components/ui/button'
 import { Card } from '../components/ui/card'
-import { Select } from '../components/ui/field'
+import { Input, Select } from '../components/ui/field'
 import { AnimatedPage } from '../components/ui/sport'
 import { getCurrentCompany, getPlayerStats } from '../lib/data'
 import { displayPosition } from '../lib/positions'
 import { usePrimaryStatLabel, type PrimaryStatLabel } from '../lib/stats-labels'
 import type { PlayerStatRow } from '../lib/types'
 
-type Period = 'day' | 'month' | 'year' | 'all'
+type Period = 'event' | 'week' | 'month' | 'date' | 'all'
 
 const periodLabels: Record<Period, string> = {
-  day: 'Hoje',
-  month: 'Mes atual',
-  year: 'Ano atual',
+  event: 'Evento selecionado',
+  week: 'Semana',
+  month: 'Mes',
+  date: 'Data',
   all: 'Historico geral',
 }
 
-function isSamePeriod(dateValue: string, period: Period) {
-  if (period === 'all') return true
+function isSameDay(dateValue: string, targetDate: string) {
+  return toDateInputValue(new Date(dateValue)) === targetDate
+}
+
+function isSameMonth(dateValue: string, targetMonth: string) {
+  return toMonthInputValue(new Date(dateValue)) === targetMonth
+}
+
+function isSameWeek(dateValue: string, targetWeek: string) {
+  const range = weekInputToRange(targetWeek)
+  if (!range) return true
   const date = new Date(dateValue)
-  const now = new Date()
-  if (period === 'day') return date.toDateString() === now.toDateString()
-  if (period === 'month') return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth()
-  return date.getFullYear() === now.getFullYear()
+  return date >= range.start && date <= range.end
 }
 
 function aggregate(rows: PlayerStatRow[]) {
@@ -56,12 +63,25 @@ function aggregate(rows: PlayerStatRow[]) {
 }
 
 export function StatsPage() {
-  const [period, setPeriod] = useState<Period>('month')
+  const [period, setPeriod] = useState<Period>('event')
+  const [selectedMatchId, setSelectedMatchId] = useState('')
+  const [selectedDate, setSelectedDate] = useState(() => toDateInputValue(new Date()))
+  const [selectedWeek, setSelectedWeek] = useState(() => toWeekInputValue(new Date()))
+  const [selectedMonth, setSelectedMonth] = useState(() => toMonthInputValue(new Date()))
   const primaryStat = usePrimaryStatLabel()
   const stats = useQuery({ queryKey: ['player-stats'], queryFn: getPlayerStats })
   const company = useQuery({ queryKey: ['current-company'], queryFn: getCurrentCompany })
 
-  const filteredRows = useMemo(() => (stats.data ?? []).filter((row) => isSamePeriod(row.match?.scheduled_at ?? row.created_at, period)), [stats.data, period])
+  const availableMatches = useMemo(() => getAvailableMatches(stats.data ?? []), [stats.data])
+  const effectiveMatchId = selectedMatchId || availableMatches[0]?.matchId || ''
+  const filteredRows = useMemo(() => (stats.data ?? []).filter((row) => {
+    const dateValue = row.match?.scheduled_at ?? row.created_at
+    if (period === 'event') return row.match_id === effectiveMatchId
+    if (period === 'week') return isSameWeek(dateValue, selectedWeek)
+    if (period === 'month') return isSameMonth(dateValue, selectedMonth)
+    if (period === 'date') return isSameDay(dateValue, selectedDate)
+    return true
+  }), [stats.data, period, effectiveMatchId, selectedWeek, selectedMonth, selectedDate])
   const ranking = useMemo(() => aggregate(filteredRows), [filteredRows])
   const scorers = [...ranking].sort((a, b) => b.goals - a.goals || b.assists - a.assists)
   const assistants = [...ranking].sort((a, b) => b.assists - a.assists || b.goals - a.goals)
@@ -70,13 +90,22 @@ export function StatsPage() {
   const uniqueMatches = new Set(filteredRows.map((row) => row.match_id)).size
   const totalGoals = filteredRows.reduce((sum, row) => sum + (row.goals ?? 0), 0)
   const totalAssists = filteredRows.reduce((sum, row) => sum + (row.assists ?? 0), 0)
+  const presentRows = useMemo(() => [...filteredRows].filter((row) => row.present).sort((a, b) => (a.player?.name ?? '').localeCompare(b.player?.name ?? '', 'pt-BR')), [filteredRows])
+  const absentRows = useMemo(() => [...filteredRows].filter((row) => !row.present).sort((a, b) => (a.player?.name ?? '').localeCompare(b.player?.name ?? '', 'pt-BR')), [filteredRows])
   const chartData = scorers.slice(0, 8).map((player) => ({ name: player.name.split(' ')[0], indicador: player.goals, assistencias: player.assists }))
   const matchResults = useMemo(() => getUniqueMatchResults(filteredRows), [filteredRows])
   const teamRanking = useMemo(() => aggregateTeamWinners(matchResults), [matchResults])
+  const selectedMatch = period === 'event' ? availableMatches.find((match) => match.matchId === effectiveMatchId) ?? null : null
+  const periodDescription = getPeriodDescription(period, {
+    selectedMatch,
+    selectedDate,
+    selectedWeek,
+    selectedMonth,
+  })
 
   const whatsappSummary = [
     `RELATORIO AGENDA SPORT - ${company.data?.name ?? 'Evento'}`,
-    `Periodo: ${periodLabels[period]}`,
+    `Periodo: ${periodDescription}`,
     '',
     `Destaque em ${primaryStat.labels.lowerPlural}: ${topScorer ? `${topScorer.name} (${topScorer.goals})` : '-'}`,
     `Garcom: ${topAssistant ? `${topAssistant.name} (${topAssistant.assists} assist.)` : '-'}`,
@@ -112,11 +141,23 @@ export function StatsPage() {
           </div>
           <div className="grid w-full min-w-56 gap-2 sm:grid-cols-2 xl:w-[640px] xl:grid-cols-[1fr_1fr_auto_auto]">
             <Select value={period} onChange={(event) => setPeriod(event.target.value as Period)}>
-              <option value="day">Hoje</option>
-              <option value="month">Mes atual</option>
-              <option value="year">Ano atual</option>
+              <option value="event">Evento</option>
+              <option value="week">Semana</option>
+              <option value="month">Mes</option>
+              <option value="date">Data</option>
               <option value="all">Historico geral</option>
             </Select>
+            {period === 'event' && (
+              <Select value={effectiveMatchId} onChange={(event) => setSelectedMatchId(event.target.value)}>
+                {availableMatches.map((match) => (
+                  <option key={match.matchId} value={match.matchId}>{match.title} - {formatDate(match.scheduledAt)}</option>
+                ))}
+                {!availableMatches.length && <option value="">Nenhum evento finalizado</option>}
+              </Select>
+            )}
+            {period === 'week' && <Input type="week" value={selectedWeek} onChange={(event) => setSelectedWeek(event.target.value)} />}
+            {period === 'month' && <Input type="month" value={selectedMonth} onChange={(event) => setSelectedMonth(event.target.value)} />}
+            {period === 'date' && <Input type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} />}
             <Select value={primaryStat.preference} onChange={(event) => primaryStat.setPreference(event.target.value as PrimaryStatLabel)}>
               <option value="GOLS">Nomenclatura: Gols</option>
               <option value="PONTOS">Nomenclatura: Pontos</option>
@@ -137,35 +178,36 @@ export function StatsPage() {
         <div className="bg-slate-950 p-6 text-white">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
-              <p className="text-xs font-black uppercase tracking-[0.22em] text-yellow-300">Relatorio oficial Agenda Sport</p>
-              <h2 className="mt-3 text-3xl font-black">{company.data?.name ?? 'Relatorio esportivo'}</h2>
-              <p className="mt-2 text-sm text-white/65">Periodo: {periodLabels[period]} - Gerado em {new Date().toLocaleDateString('pt-BR')}</p>
+              <p className="text-xs font-black uppercase tracking-[0.22em] text-yellow-300">Sumula oficial Agenda Sport</p>
+              <h2 className="mt-3 text-3xl font-black">{period === 'event' ? selectedMatch?.title ?? 'Evento esportivo' : company.data?.name ?? 'Relatorio esportivo'}</h2>
+              <p className="mt-2 text-sm text-white/65">Periodo: {periodDescription} - Gerado em {new Date().toLocaleDateString('pt-BR')}</p>
             </div>
             <img src="/agendasport.svg" alt="Agenda Sport" className="size-16 rounded-2xl" />
           </div>
-        </div>
-
-        <div className="grid gap-4 p-5 lg:grid-cols-3">
-          <div className="rounded-2xl border border-border bg-slate-950 p-5 text-white">
-            <p className="text-sm text-white/65">Destaque em {primaryStat.labels.lowerPlural}</p>
-            <p className="mt-2 text-2xl font-black">{topScorer?.name ?? '-'}</p>
-            <p className="mt-5 text-4xl font-black text-yellow-300">{topScorer?.goals ?? 0}</p>
-          </div>
-          <div className="rounded-2xl border border-border bg-green-50 p-5 text-green-950">
-            <p className="text-sm text-green-900/65">Maior assistente</p>
-            <p className="mt-2 text-2xl font-black">{topAssistant?.name ?? '-'}</p>
-            <p className="mt-5 text-4xl font-black text-primary">{topAssistant?.assists ?? 0} assist.</p>
-          </div>
-          <div className="rounded-2xl border border-border bg-yellow-50 p-5 text-yellow-950">
-            <p className="text-sm text-yellow-900/65">Eventos com estatisticas</p>
-            <p className="mt-2 text-2xl font-black">{uniqueMatches}</p>
-            <p className="mt-5 text-sm font-semibold">{totalGoals} {primaryStat.labels.lowerPlural} e {totalAssists} assistencias lancados no periodo.</p>
+          <div className="mt-6 grid gap-3 md:grid-cols-4">
+            <ReportMeta icon={<CalendarDays size={22} />} label="Data" value={selectedMatch ? formatDate(selectedMatch.scheduledAt) : periodLabels[period]} />
+            <ReportMeta icon={<ClockIcon />} label="Horario" value={selectedMatch ? formatTime(selectedMatch.scheduledAt) : '-'} />
+            <ReportMeta icon={<ClipboardList size={22} />} label="Local" value={selectedMatch?.title ?? company.data?.name ?? 'Agenda Sport'} />
+            <ReportMeta icon={<Trophy size={22} />} label="Formato" value={`${presentRows.length} presentes`} />
           </div>
         </div>
 
-        <div className="grid gap-4 p-5 pt-0 xl:grid-cols-[1fr_420px]">
+        <div className="grid gap-4 p-5 xl:grid-cols-[1fr_1fr]">
+          <PresenceTable title="Quem compareceu" tone="present" rows={presentRows} />
+          <PresenceTable title="Quem nao compareceu" tone="absent" rows={absentRows} />
+        </div>
+
+        <div className="grid gap-4 p-5 pt-0 xl:grid-cols-[1fr_1fr]">
+          <SummaryPanel
+            present={presentRows.length}
+            absent={absentRows.length}
+            goals={totalGoals}
+            assists={totalAssists}
+            statLabel={primaryStat.labels.plural}
+            topScorer={topScorer}
+            statLower={primaryStat.labels.lowerPlural}
+          />
           <ReportRanking title={`Top ${primaryStat.labels.lowerPlural}`} label={primaryStat.labels.short} rows={scorers.slice(0, 10).map((player) => ({ name: player.name, meta: player.position, value: `${player.goals}` }))} />
-          <ReportRanking title="Maiores assistentes" label="Assist." rows={assistants.slice(0, 10).map((player) => ({ name: player.name, meta: player.position, value: `${player.assists} assist.` }))} />
         </div>
 
         <div className="grid gap-4 p-5 pt-0 xl:grid-cols-[420px_1fr]">
@@ -328,6 +370,113 @@ function ReportRanking({ title, label, rows }: { title: string; label: string; r
   )
 }
 
+function ReportMeta({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
+  return (
+    <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/8 px-3 py-3">
+      <div className="text-green-300">{icon}</div>
+      <div className="min-w-0">
+        <p className="text-xs font-black uppercase tracking-wide text-white/45">{label}</p>
+        <p className="truncate text-sm font-black text-white">{value}</p>
+      </div>
+    </div>
+  )
+}
+
+function PresenceTable({ title, tone, rows }: { title: string; tone: 'present' | 'absent'; rows: PlayerStatRow[] }) {
+  const present = tone === 'present'
+  return (
+    <div className="overflow-hidden rounded-2xl border border-border bg-white dark:bg-slate-950">
+      <div className={`flex items-center gap-3 px-4 py-3 text-white ${present ? 'bg-green-700' : 'bg-red-700'}`}>
+        {present ? <CheckCircle2 size={26} /> : <XCircle size={26} />}
+        <h3 className="text-xl font-black uppercase tracking-wide">{title}</h3>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[420px] text-sm">
+          <thead className="bg-slate-950 text-white">
+            <tr>
+              <th className="w-14 px-3 py-3 text-left">#</th>
+              <th className="px-3 py-3 text-left">Participante</th>
+              <th className="px-3 py-3 text-left">Funcao</th>
+              <th className="px-3 py-3 text-left">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, index) => (
+              <tr key={row.id} className="border-b border-border last:border-0">
+                <td className={`px-3 py-2 font-black ${present ? 'bg-green-700 text-white' : 'bg-red-700 text-white'}`}>{index + 1}</td>
+                <td className="px-3 py-2 font-black">{row.player?.name ?? 'Participante'}</td>
+                <td className="px-3 py-2">{displayPosition(row.player?.primary_position)}</td>
+                <td className={`px-3 py-2 font-black ${present ? 'text-green-700' : 'text-red-700'}`}>{present ? 'Presente' : 'Ausente'}</td>
+              </tr>
+            ))}
+            {!rows.length && (
+              <tr>
+                <td colSpan={4} className="px-3 py-8 text-center text-muted-foreground">Nenhum participante nesta lista.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function SummaryPanel({
+  present,
+  absent,
+  goals,
+  assists,
+  statLabel,
+  topScorer,
+  statLower,
+}: {
+  present: number
+  absent: number
+  goals: number
+  assists: number
+  statLabel: string
+  topScorer?: { name: string; goals: number } | null
+  statLower: string
+}) {
+  return (
+    <div className="grid gap-4">
+      <div className="overflow-hidden rounded-2xl border border-border bg-white dark:bg-slate-950">
+        <div className="flex items-center gap-3 bg-slate-950 px-4 py-3 text-white">
+          <ClipboardList className="text-green-300" size={24} />
+          <h3 className="text-xl font-black uppercase tracking-wide">Resumo da partida</h3>
+        </div>
+        <div className="grid divide-y divide-border">
+          <SummaryLine label="Presentes" value={present} tone="green" />
+          <SummaryLine label="Ausentes" value={absent} tone="red" />
+          <SummaryLine label={`Total de ${statLabel.toLowerCase()}`} value={goals} tone="green" />
+          <SummaryLine label="Total de assistencias" value={assists} tone="green" />
+        </div>
+      </div>
+      <div className="relative overflow-hidden rounded-2xl border border-green-200 bg-green-50 p-5 text-green-950 dark:border-green-900/50 dark:bg-green-950/30 dark:text-green-50">
+        <div className="flex items-center gap-2">
+          <Medal className="text-yellow-500" size={28} />
+          <p className="text-xl font-black uppercase tracking-wide">Destaque da partida</p>
+        </div>
+        <div className="mt-4 grid grid-cols-[72px_1fr] items-center gap-4">
+          <div className="grid size-16 place-items-center rounded-full bg-green-700 text-3xl font-black text-white">{topScorer?.goals ?? 0}</div>
+          <div>
+            <p className="text-2xl font-black">{topScorer?.name ?? '-'}</p>
+            <p className="mt-1 text-sm font-black uppercase text-green-700 dark:text-green-300">{topScorer?.goals ?? 0} {statLower}</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function SummaryLine({ label, value, tone }: { label: string; value: number; tone: 'green' | 'red' }) {
+  return (
+    <div className="grid grid-cols-[1fr_96px] items-center gap-3 px-4 py-3">
+      <p className="font-black uppercase">{label}</p>
+      <span className={`rounded-lg px-4 py-1.5 text-center text-lg font-black text-white ${tone === 'green' ? 'bg-green-700' : 'bg-red-700'}`}>{value}</span>
+    </div>
+  )
+}
 
 function RankingRow({ index, name, meta, value }: { index: number; name: string; meta: string; value: string }) {
   return (
@@ -396,4 +545,91 @@ function aggregateTeamWinners(matches: ReturnType<typeof getUniqueMatchResults>)
 function formatTeamScore(results: NonNullable<PlayerStatRow['match']>['team_results']) {
   if (!results?.length) return 'Sem resultado informado'
   return results.map((team) => `${team.name} ${team.score}`).join(' x ')
+}
+
+function getAvailableMatches(rows: PlayerStatRow[]) {
+  const map = new Map<string, { matchId: string; scheduledAt: string; title: string }>()
+  rows.forEach((row) => {
+    if (!row.match || map.has(row.match_id)) return
+    map.set(row.match_id, {
+      matchId: row.match_id,
+      scheduledAt: row.match.scheduled_at,
+      title: row.match.notes?.trim() || 'Evento esportivo',
+    })
+  })
+  return [...map.values()].sort((left, right) => new Date(right.scheduledAt).getTime() - new Date(left.scheduledAt).getTime())
+}
+
+function getPeriodDescription(period: Period, input: {
+  selectedMatch: ReturnType<typeof getAvailableMatches>[number] | null
+  selectedDate: string
+  selectedWeek: string
+  selectedMonth: string
+}) {
+  if (period === 'event') {
+    return input.selectedMatch ? `${input.selectedMatch.title} - ${formatDate(input.selectedMatch.scheduledAt)}` : 'Evento selecionado'
+  }
+  if (period === 'date') return formatDate(`${input.selectedDate}T12:00:00`)
+  if (period === 'month') {
+    const [year, month] = input.selectedMonth.split('-').map(Number)
+    if (!year || !month) return 'Mes selecionado'
+    return new Date(year, month - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })
+  }
+  if (period === 'week') {
+    const range = weekInputToRange(input.selectedWeek)
+    if (!range) return 'Semana selecionada'
+    return `${formatDate(range.start.toISOString())} a ${formatDate(range.end.toISOString())}`
+  }
+  return 'Historico geral'
+}
+
+function toDateInputValue(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function toMonthInputValue(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+}
+
+function toWeekInputValue(date: Date) {
+  const target = new Date(date)
+  target.setHours(0, 0, 0, 0)
+  target.setDate(target.getDate() + 3 - ((target.getDay() + 6) % 7))
+  const week1 = new Date(target.getFullYear(), 0, 4)
+  const week = 1 + Math.round(((target.getTime() - week1.getTime()) / 86400000 - 3 + ((week1.getDay() + 6) % 7)) / 7)
+  return `${target.getFullYear()}-W${String(week).padStart(2, '0')}`
+}
+
+function weekInputToRange(value: string) {
+  const match = value.match(/^(\d{4})-W(\d{2})$/)
+  if (!match) return null
+  const year = Number(match[1])
+  const week = Number(match[2])
+  if (!year || !week) return null
+  const simple = new Date(year, 0, 1 + (week - 1) * 7)
+  const day = simple.getDay()
+  const monday = new Date(simple)
+  monday.setDate(simple.getDate() - ((day + 6) % 7))
+  monday.setHours(0, 0, 0, 0)
+  const sunday = new Date(monday)
+  sunday.setDate(monday.getDate() + 6)
+  sunday.setHours(23, 59, 59, 999)
+  return { start: monday, end: sunday }
+}
+
+function formatDate(value: string) {
+  return new Date(value).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })
+}
+
+function formatTime(value: string) {
+  return new Date(value).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+}
+
+function ClockIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-6" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 2" />
+    </svg>
+  )
 }
