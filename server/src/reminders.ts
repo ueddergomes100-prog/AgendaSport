@@ -217,7 +217,7 @@ async function getConfirmationSchedules(tenantId: string): Promise<ReminderStage
   if (error) throw error
 
   const rows = (data ?? []).slice(0, 5)
-  if (rows.length < 4) return [...confirmationReminderStages]
+  if (rows.length < 2) return [...confirmationReminderStages]
 
   return rows.map((row) => ({
     stageNumber: row.stage_number,

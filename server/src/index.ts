@@ -150,6 +150,25 @@ function normalizeWhatsApp(value: string) {
   return local
 }
 
+async function getPublicRegistrationConfirmationStage(tenantId: string) {
+  const { data, error } = await adminSupabase
+    .from('confirmation_schedules')
+    .select('stage_number, days_before, enabled')
+    .eq('tenant_id', tenantId)
+    .eq('enabled', true)
+    .order('days_before', { ascending: true })
+    .order('stage_number', { ascending: true })
+
+  if (error && isMissingConfirmationSchedulesError(error.message)) return 4
+  if (error) throw error
+
+  const rows = data ?? []
+  const eventDayStage = rows.find((row) => Number(row.days_before) === 0)
+  const selectedStage = Number(eventDayStage?.stage_number ?? rows[0]?.stage_number ?? 4)
+  if (!Number.isFinite(selectedStage)) return 4
+  return Math.max(1, Math.min(5, Math.trunc(selectedStage)))
+}
+
 app.post('/api/public-registration/:token/players', async (req, res) => {
   const paramsSchema = z.object({ token: z.string().uuid() })
   const bodySchema = z.object({
@@ -190,6 +209,7 @@ app.post('/api/public-registration/:token/players', async (req, res) => {
     const lastName = input.last_name.trim()
     const fullName = `${firstName} ${lastName}`
     const position = input.position_kind === 'GOLEIRO' ? 'Goleiro' : 'Meio Campo'
+    const confirmationStage = await getPublicRegistrationConfirmationStage(company.id)
     const basePlayerPayload = {
       tenant_id: company.id,
       first_name: firstName,
@@ -201,6 +221,7 @@ app.post('/api/public-registration/:token/players', async (req, res) => {
       type: 'AVULSO',
       technical_score: 5,
       primary_position: position,
+      confirmation_stage: confirmationStage,
       notes: input.position_kind === 'GOLEIRO' ? 'Autoinscricao: goleiro' : 'Autoinscricao: jogador de linha',
     }
 
@@ -464,6 +485,10 @@ app.post('/api/billing/monthly/run', requireAuth, async (req, res) => {
 
 function isMissingBillingTableError(message: string) {
   return message.includes('billing_settings') && (message.includes('schema cache') || message.includes('does not exist') || message.includes('relation'))
+}
+
+function isMissingConfirmationSchedulesError(message: string) {
+  return message.includes('confirmation_schedules') && (message.includes('schema cache') || message.includes('does not exist') || message.includes('relation'))
 }
 
 app.post('/api/backups/manual', requireAuth, requireSuperAdmin, async (_req, res) => {

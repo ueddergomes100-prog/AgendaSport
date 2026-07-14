@@ -68,7 +68,7 @@ export function SettingsPage() {
     setFeedback('')
     try {
       const enabledCount = scheduleRows.filter((row) => row.enabled).length
-      if (enabledCount < 4) throw new Error('Mantenha pelo menos 4 etapas de convocacao ativas.')
+      if (enabledCount < 2) throw new Error('Mantenha pelo menos 2 etapas de convocacao ativas.')
       if (enabledCount > 5) throw new Error('O limite maximo e de 5 etapas de convocacao.')
       await saveConfirmationSchedules(scheduleRows)
       await schedules.refetch()
@@ -109,7 +109,7 @@ export function SettingsPage() {
             </p>
           </div>
           <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-bold text-green-950 dark:border-green-900/50 dark:bg-green-950/30 dark:text-green-100">
-            4 etapas obrigatorias, 5 no maximo
+            2 etapas obrigatorias, 5 no maximo
           </div>
         </div>
       </section>
@@ -134,7 +134,7 @@ export function SettingsPage() {
                 <div>
                   <p className="text-xs font-black uppercase tracking-wide text-muted-foreground">Etapa</p>
                   <p className="mt-2 text-lg font-black">{row.stage_number}</p>
-                  {row.stage_number === 5 && <p className="text-xs font-semibold text-muted-foreground">Opcional</p>}
+                  {!row.enabled && <p className="text-xs font-semibold text-muted-foreground">Removida</p>}
                 </div>
                 <Field label="Dias antes">
                   <Input
@@ -157,7 +157,6 @@ export function SettingsPage() {
                     type="checkbox"
                     className="size-5 accent-green-700"
                     checked={row.enabled}
-                    disabled={row.stage_number < 5}
                     onChange={(event) => updateSchedule(row.stage_number, { enabled: event.currentTarget.checked })}
                   />
                   {row.enabled ? 'Ativa' : 'Inativa'}
