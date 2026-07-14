@@ -85,12 +85,7 @@ function isOrphanAutomaticMatch(match: Pick<Match, 'pickup_id' | 'notes'>) {
 }
 
 export async function getPlayerStats(): Promise<PlayerStatRow[]> {
-  const { data, error } = await supabase
-    .from('match_player_stats')
-    .select('*, player:players(id, name, primary_position, photo_url), match:matches(id, scheduled_at, team_a_name, team_b_name, team_results, notes)')
-    .order('created_at', { ascending: false })
-  if (error) throw error
-  return data ?? []
+  return selectPlayerStats()
 }
 
 export async function getCompletedMatchSheets(): Promise<CompletedMatchSheet[]> {
@@ -101,14 +96,9 @@ export async function getCompletedMatchSheets(): Promise<CompletedMatchSheet[]> 
     .order('scheduled_at', { ascending: false })
   if (closedMatchesError) throw closedMatchesError
 
-  const { data: statsData, error: statsError } = await supabase
-    .from('match_player_stats')
-    .select('*, player:players(id, name, primary_position, photo_url), match:matches(id, scheduled_at, team_a_name, team_b_name, team_results, notes)')
-    .order('created_at', { ascending: false })
-  if (statsError) throw statsError
+  const stats = await selectPlayerStats()
 
   const closedMatches = (closedMatchesData ?? []) as Match[]
-  const stats = (statsData ?? []) as PlayerStatRow[]
   const matchIds = unique([
     ...closedMatches.map((match) => match.id),
     ...stats.map((row) => row.match_id),
@@ -162,13 +152,34 @@ export async function getCompletedMatchSheets(): Promise<CompletedMatchSheet[]> 
 }
 
 export async function getMatchPlayerStats(matchId: string): Promise<PlayerStatRow[]> {
-  const { data, error } = await supabase
+  return selectPlayerStats(matchId)
+}
+
+async function selectPlayerStats(matchId?: string): Promise<PlayerStatRow[]> {
+  let query = supabase
     .from('match_player_stats')
     .select('*, player:players(id, name, primary_position, photo_url), match:matches(id, scheduled_at, team_a_name, team_b_name, team_results, notes)')
-    .eq('match_id', matchId)
     .order('created_at', { ascending: false })
-  if (error) throw error
-  return data ?? []
+
+  if (matchId) query = query.eq('match_id', matchId)
+
+  const { data, error } = await query
+  if (!error) return data ?? []
+  if (!isMissingColumnError(error.message, 'team_results')) throw error
+
+  let legacyQuery = supabase
+    .from('match_player_stats')
+    .select('*, player:players(id, name, primary_position, photo_url), match:matches(id, scheduled_at, team_a_name, team_b_name, notes)')
+    .order('created_at', { ascending: false })
+
+  if (matchId) legacyQuery = legacyQuery.eq('match_id', matchId)
+
+  const { data: legacyData, error: legacyError } = await legacyQuery
+  if (legacyError) throw legacyError
+  return (legacyData ?? []).map((row) => ({
+    ...row,
+    match: row.match ? { ...row.match, team_results: null } : row.match,
+  })) as PlayerStatRow[]
 }
 
 function createStatsRowFromAttendance(
@@ -193,7 +204,7 @@ function createStatsRowFromAttendance(
       scheduled_at: match.scheduled_at,
       team_a_name: match.team_a_name,
       team_b_name: match.team_b_name,
-      team_results: match.team_results,
+      team_results: match.team_results ?? null,
       notes: match.notes,
     },
   }
