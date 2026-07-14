@@ -94,16 +94,33 @@ export async function getPlayerStats(): Promise<PlayerStatRow[]> {
 }
 
 export async function getCompletedMatchSheets(): Promise<CompletedMatchSheet[]> {
-  const matches = (await getMatches()).filter((match) => match.status === 'ENCERRADA')
-  const matchIds = matches.map((match) => match.id)
-  if (!matchIds.length) return []
+  const { data: closedMatchesData, error: closedMatchesError } = await supabase
+    .from('matches')
+    .select('*')
+    .eq('status', 'ENCERRADA')
+    .order('scheduled_at', { ascending: false })
+  if (closedMatchesError) throw closedMatchesError
 
   const { data: statsData, error: statsError } = await supabase
     .from('match_player_stats')
     .select('*, player:players(id, name, primary_position, photo_url), match:matches(id, scheduled_at, team_a_name, team_b_name, team_results, notes)')
-    .in('match_id', matchIds)
     .order('created_at', { ascending: false })
   if (statsError) throw statsError
+
+  const closedMatches = (closedMatchesData ?? []) as Match[]
+  const stats = (statsData ?? []) as PlayerStatRow[]
+  const matchIds = unique([
+    ...closedMatches.map((match) => match.id),
+    ...stats.map((row) => row.match_id),
+  ])
+  if (!matchIds.length) return []
+
+  const { data: matchesData, error: matchesError } = await supabase
+    .from('matches')
+    .select('*')
+    .in('id', matchIds)
+    .order('scheduled_at', { ascending: false })
+  if (matchesError) throw matchesError
 
   const { data: attendanceData, error: attendanceError } = await supabase
     .from('attendance')
@@ -111,12 +128,12 @@ export async function getCompletedMatchSheets(): Promise<CompletedMatchSheet[]> 
     .in('match_id', matchIds)
   if (attendanceError) throw attendanceError
 
-  const stats = (statsData ?? []) as PlayerStatRow[]
+  const matches = (matchesData ?? []) as Match[]
   const attendance = (attendanceData ?? []) as Array<Attendance & { player?: Pick<Player, 'id' | 'name' | 'primary_position' | 'photo_url'> }>
   const statsByMatch = groupBy(stats, (row) => row.match_id)
   const attendanceByMatch = groupBy(attendance, (row) => row.match_id)
 
-  return matches.map((match) => {
+  return matches.filter((match) => match.status === 'ENCERRADA' || (statsByMatch.get(match.id)?.length ?? 0) > 0).map((match) => {
     const savedRows = statsByMatch.get(match.id) ?? []
     const savedByPlayer = new Map(savedRows.map((row) => [row.player_id, row]))
     const consumedStats = new Set<string>()
@@ -191,6 +208,10 @@ function groupBy<T, K>(items: T[], keyGetter: (item: T) => K) {
     map.set(key, group)
   })
   return map
+}
+
+function unique<T>(items: T[]) {
+  return [...new Set(items)]
 }
 
 export async function getLatestTeamDraw(matchId: string): Promise<TeamDrawRecord | null> {
