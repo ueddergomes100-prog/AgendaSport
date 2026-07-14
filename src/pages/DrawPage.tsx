@@ -21,10 +21,12 @@ export function DrawPage() {
   const [draw, setDraw] = useState<TeamDraw | null>(null)
   const [saving, setSaving] = useState(false)
   const [feedback, setFeedback] = useState('')
-  const effectiveMatchId = matchId || matches.data?.[0]?.id || ''
+  const activeMatches = useMemo(() => (matches.data ?? []).filter((match) => match.status !== 'ENCERRADA' && match.status !== 'CANCELADA'), [matches.data])
+  const effectiveMatchId = matchId || activeMatches[0]?.id || ''
   const attendance = useQuery({ queryKey: ['attendance', effectiveMatchId], queryFn: () => getAttendance(effectiveMatchId), enabled: Boolean(effectiveMatchId) })
 
   const selectedMatch = useMemo(() => (matches.data ?? []).find((match) => match.id === effectiveMatchId) ?? null, [matches.data, effectiveMatchId])
+  const canManageDraw = Boolean(selectedMatch && selectedMatch.status !== 'ENCERRADA' && selectedMatch.status !== 'CANCELADA')
   const confirmedPlayers = useMemo(
     () => (attendance.data ?? [])
       .filter((item) => ['CONFIRMADO', 'COMPARECEU'].includes(item.status) && item.player)
@@ -43,6 +45,10 @@ export function DrawPage() {
 
   function makeDraw() {
     setFeedback('')
+    if (!canManageDraw) {
+      setFeedback('Este evento ja foi encerrado ou cancelado. Nao e possivel montar equipes.')
+      return
+    }
     const nextDraw = buildBalancedTeams(confirmedPlayers, teamCount, playersPerTeam)
     setDraw(nextDraw)
     if (nextDraw.unassigned.length) {
@@ -51,7 +57,7 @@ export function DrawPage() {
   }
 
   async function persistDraw() {
-    if (!draw || !effectiveMatchId) return
+    if (!draw || !effectiveMatchId || !canManageDraw) return
     setSaving(true)
     setFeedback('')
     try {
@@ -89,11 +95,11 @@ export function DrawPage() {
           <div className="grid w-full gap-2 sm:grid-cols-[minmax(220px,1fr)_auto] xl:w-[520px]">
             <Select value={effectiveMatchId} onChange={(event) => { setMatchId(event.target.value); resetDraw() }}>
               <option value="">Selecione o evento</option>
-              {(matches.data ?? []).map((match) => (
-                <option key={match.id} value={match.id}>{new Date(match.scheduled_at).toLocaleString('pt-BR')}</option>
+              {activeMatches.map((match) => (
+                <option key={match.id} value={match.id}>{new Date(match.scheduled_at).toLocaleString('pt-BR')} - {match.status}</option>
               ))}
             </Select>
-            <Button type="button" disabled={!confirmedPlayers.length || !drawCapacity} onClick={makeDraw}>
+            <Button type="button" disabled={!canManageDraw || !confirmedPlayers.length || !drawCapacity} onClick={makeDraw}>
               <Sparkles size={16} />
               Montar equipes
             </Button>
@@ -144,11 +150,11 @@ export function DrawPage() {
               <p className="text-xs font-black uppercase tracking-wide text-yellow-200">Evento selecionado</p>
               <h2 className="mt-3 text-2xl font-black">{selectedMatch ? 'Encontro esportivo' : 'Selecione um evento'}</h2>
               <p className="mt-2 text-sm text-white/70">
-                {selectedMatch ? new Date(selectedMatch.scheduled_at).toLocaleString('pt-BR') : 'A lista de confirmados aparece depois da chamada na agenda.'}
+                {selectedMatch ? `${new Date(selectedMatch.scheduled_at).toLocaleString('pt-BR')} - ${selectedMatch.status}` : 'A lista de confirmados aparece depois da chamada na agenda.'}
               </p>
             </div>
             <div className="grid grid-cols-2 gap-2 sm:flex">
-              <Button type="button" variant="secondary" disabled={!confirmedPlayers.length} onClick={makeDraw}>
+              <Button type="button" variant="secondary" disabled={!canManageDraw || !confirmedPlayers.length} onClick={makeDraw}>
                 <RefreshCcw size={16} />
                 Refazer
               </Button>
@@ -160,7 +166,7 @@ export function DrawPage() {
                 <MessageCircle size={16} />
                 WhatsApp
               </Button>
-              <Button type="button" disabled={!draw || saving} onClick={persistDraw}>
+              <Button type="button" disabled={!canManageDraw || !draw || saving} onClick={persistDraw}>
                 {saving ? <LoaderCircle className="animate-spin" size={16} /> : <Save size={16} />}
                 {saving ? 'Salvando...' : 'Salvar'}
               </Button>
@@ -168,7 +174,17 @@ export function DrawPage() {
           </div>
         </div>
 
-        {!confirmedPlayers.length && (
+        {!activeMatches.length && (
+          <div className="grid place-items-center p-10 text-center">
+            <div className="grid size-14 place-items-center rounded-2xl bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-100">
+              <Trophy size={24} />
+            </div>
+            <h3 className="mt-4 text-lg font-black">Nenhum evento liberado para sorteio</h3>
+            <p className="mt-1 max-w-md text-sm text-muted-foreground">Eventos encerrados ou cancelados ficam bloqueados. Crie ou selecione um evento agendado para montar equipes.</p>
+          </div>
+        )}
+
+        {activeMatches.length > 0 && !confirmedPlayers.length && (
           <div className="grid place-items-center p-10 text-center">
             <div className="grid size-14 place-items-center rounded-2xl bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-100">
               <Users size={24} />

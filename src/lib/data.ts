@@ -341,8 +341,13 @@ export async function runMonthlyBilling(): Promise<{ created: number; skipped: n
 }
 
 export async function saveTeamDraw(matchId: string, payload: unknown) {
-  const tenantId = await getMatchTenantId(matchId)
-  const { error } = await supabase.from('team_draws').insert({ tenant_id: tenantId, match_id: matchId, payload })
+  const { data: match, error: matchError } = await supabase.from('matches').select('tenant_id, status').eq('id', matchId).single()
+  if (matchError) throw matchError
+  if (match.status === 'ENCERRADA' || match.status === 'CANCELADA') {
+    throw new Error('Nao e possivel montar equipes para um evento encerrado ou cancelado.')
+  }
+
+  const { error } = await supabase.from('team_draws').insert({ tenant_id: match.tenant_id, match_id: matchId, payload })
   if (error) throw error
 }
 
