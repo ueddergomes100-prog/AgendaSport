@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { CalendarDays, CheckCircle2, ClipboardList, Copy, Download, Medal, MessageCircle, Trophy, XCircle } from 'lucide-react'
+import { CalendarDays, ClipboardList, Copy, Download, Medal, MessageCircle, Trophy } from 'lucide-react'
 import { Button } from '../components/ui/button'
 import { Card } from '../components/ui/card'
 import { AnimatedPage } from '../components/ui/sport'
@@ -58,6 +58,7 @@ export function StatsPage() {
   const scorers = [...ranking].sort((a, b) => b.goals - a.goals || b.assists - a.assists || a.name.localeCompare(b.name, 'pt-BR'))
   const assistants = [...ranking].sort((a, b) => b.assists - a.assists || b.goals - a.goals || a.name.localeCompare(b.name, 'pt-BR'))
   const topScorer = scorers[0]
+  const topAssistant = assistants.find((player) => player.assists > 0) ?? assistants[0]
   const totalGoals = rows.reduce((sum, row) => sum + (row.goals ?? 0), 0)
   const totalAssists = rows.reduce((sum, row) => sum + (row.assists ?? 0), 0)
   const teamResults = selectedEvent?.rows.find((row) => row.match?.team_results?.length)?.match?.team_results ?? []
@@ -158,8 +159,8 @@ export function StatsPage() {
             presentRows={presentRows}
             absentRows={absentRows}
             scorers={scorers}
-            assistants={assistants}
             topScorer={topScorer}
+            topAssistant={topAssistant}
             totalGoals={totalGoals}
             totalAssists={totalAssists}
             teamResults={teamResults}
@@ -187,8 +188,8 @@ function MatchSheet({
   presentRows,
   absentRows,
   scorers,
-  assistants,
   topScorer,
+  topAssistant,
   totalGoals,
   totalAssists,
   teamResults,
@@ -203,8 +204,8 @@ function MatchSheet({
   presentRows: PlayerStatRow[]
   absentRows: PlayerStatRow[]
   scorers: ReturnType<typeof aggregate>
-  assistants: ReturnType<typeof aggregate>
   topScorer?: ReturnType<typeof aggregate>[number]
+  topAssistant?: ReturnType<typeof aggregate>[number]
   totalGoals: number
   totalAssists: number
   teamResults: MatchTeamResult[]
@@ -216,16 +217,16 @@ function MatchSheet({
 }) {
   return (
     <section className="print-report overflow-hidden rounded-2xl bg-white shadow-2xl shadow-slate-950/10 dark:bg-slate-950">
-      <div className="bg-slate-950 p-5 text-white sm:p-6">
+      <div className="report-header bg-slate-950 p-5 text-white sm:p-6">
         <div className="grid gap-4 lg:grid-cols-[1fr_auto] lg:items-start">
           <div>
             <p className="text-xs font-black uppercase tracking-[0.22em] text-green-300">{companyName}</p>
-            <h2 className="mt-3 text-3xl font-black sm:text-4xl">Sumula do evento</h2>
+            <h2 className="report-title mt-3 text-3xl font-black sm:text-4xl">Sumula do evento</h2>
             <p className="mt-2 text-lg font-black text-yellow-300">{event.title}</p>
           </div>
           <img src="/agendasport.svg" alt="Agenda Sport" className="size-16 rounded-2xl" />
         </div>
-        <div className="mt-6 grid gap-3 md:grid-cols-4">
+        <div className="report-meta-grid mt-6 grid gap-3 md:grid-cols-4">
           <ReportMeta icon={<CalendarDays size={22} />} label="Data" value={formatDate(event.scheduledAt)} />
           <ReportMeta icon={<ClockIcon />} label="Horario" value={formatTime(event.scheduledAt)} />
           <ReportMeta icon={<ClipboardList size={22} />} label="Evento" value={event.title} />
@@ -239,26 +240,19 @@ function MatchSheet({
         </div>
       )}
 
-      <div className="grid gap-4 p-4 sm:p-5 xl:grid-cols-[1fr_1fr]">
-        <PresenceTable title="Quem compareceu" tone="present" rows={presentRows} />
+      <div className="report-main-grid grid gap-4 p-4 sm:p-5 xl:grid-cols-[1.2fr_0.8fr]">
+        <StatsRankingTable title={`Ranking de ${statLower}`} statPlural={statPlural} rows={scorers} />
         <div className="grid gap-4">
-          <PresenceTable title="Quem nao compareceu" tone="absent" rows={absentRows} compact />
-          <ReportRanking title={`Ranking de ${statLower}`} label={statPlural} rows={scorers.map((player) => ({ name: player.name, meta: `${player.position} - ${player.assists} assist.`, value: `${player.goals}` }))} />
-        </div>
-      </div>
-
-      <div className="grid gap-4 p-4 pt-0 sm:p-5 sm:pt-0 xl:grid-cols-[1fr_1fr]">
-        <SummaryPanel
-          present={presentRows.length}
-          absent={absentRows.length}
-          goals={totalGoals}
-          assists={totalAssists}
-          statLabel={statPlural}
-          topScorer={topScorer}
-          statLower={statLower}
-        />
-        <div className="grid gap-4">
-          <ReportRanking title="Maiores assistentes" label="Assist." rows={assistants.map((player) => ({ name: player.name, meta: `${player.position} - ${player.goals} ${statLower}`, value: `${player.assists}` }))} />
+          <SummaryPanel
+            present={presentRows.length}
+            absent={absentRows.length}
+            goals={totalGoals}
+            assists={totalAssists}
+            statLabel={statPlural}
+            topScorer={topScorer}
+            topAssistant={topAssistant}
+            statLower={statLower}
+          />
           <ResultPanel teamResults={teamResults} teamWinner={teamWinner} />
         </div>
       </div>
@@ -289,45 +283,6 @@ function ReportMeta({ icon, label, value }: { icon: React.ReactNode; label: stri
   )
 }
 
-function PresenceTable({ title, tone, rows, compact }: { title: string; tone: 'present' | 'absent'; rows: PlayerStatRow[]; compact?: boolean }) {
-  const present = tone === 'present'
-  return (
-    <div className="overflow-hidden rounded-2xl border border-border bg-white dark:bg-slate-950">
-      <div className={`flex items-center gap-3 px-4 py-3 text-white ${present ? 'bg-green-700' : 'bg-red-700'}`}>
-        {present ? <CheckCircle2 size={26} /> : <XCircle size={26} />}
-        <h3 className="text-lg font-black uppercase tracking-wide sm:text-xl">{title}</h3>
-      </div>
-      <div className="overflow-x-auto">
-        <table className={`w-full text-sm ${compact ? 'min-w-[360px]' : 'min-w-[460px]'}`}>
-          <thead className="bg-slate-950 text-white">
-            <tr>
-              <th className="w-14 px-3 py-3 text-left">#</th>
-              <th className="px-3 py-3 text-left">Participante</th>
-              <th className="px-3 py-3 text-left">Funcao</th>
-              <th className="px-3 py-3 text-left">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row, index) => (
-              <tr key={row.id} className="border-b border-border last:border-0">
-                <td className={`px-3 py-2 font-black ${present ? 'bg-green-700 text-white' : 'bg-red-700 text-white'}`}>{index + 1}</td>
-                <td className="px-3 py-2 font-black">{row.player?.name ?? 'Participante'}</td>
-                <td className="px-3 py-2">{displayPosition(row.player?.primary_position)}</td>
-                <td className={`px-3 py-2 font-black ${present ? 'text-green-700' : 'text-red-700'}`}>{present ? 'Presente' : 'Ausente'}</td>
-              </tr>
-            ))}
-            {!rows.length && (
-              <tr>
-                <td colSpan={4} className="px-3 py-8 text-center text-muted-foreground">Nenhum participante nesta lista.</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  )
-}
-
 function SummaryPanel({
   present,
   absent,
@@ -335,6 +290,7 @@ function SummaryPanel({
   assists,
   statLabel,
   topScorer,
+  topAssistant,
   statLower,
 }: {
   present: number
@@ -343,20 +299,21 @@ function SummaryPanel({
   assists: number
   statLabel: string
   topScorer?: { name: string; goals: number } | null
+  topAssistant?: { name: string; assists: number } | null
   statLower: string
 }) {
   return (
     <div className="grid gap-4">
-      <div className="overflow-hidden rounded-2xl border border-border bg-white dark:bg-slate-950">
-        <div className="flex items-center gap-3 bg-slate-950 px-4 py-3 text-white">
-          <ClipboardList className="text-green-300" size={24} />
-          <h3 className="text-lg font-black uppercase tracking-wide sm:text-xl">Resumo da partida</h3>
-        </div>
-        <div className="grid divide-y divide-border">
-          <SummaryLine label="Presentes" value={present} tone="green" />
-          <SummaryLine label="Ausentes" value={absent} tone="red" />
-          <SummaryLine label={`Total de ${statLabel.toLowerCase()}`} value={goals} tone="green" />
-          <SummaryLine label="Total de assistencias" value={assists} tone="green" />
+      <div className="rounded-2xl border border-border bg-white p-4 dark:bg-slate-950">
+        <h3 className="mb-4 flex items-center gap-2 text-lg font-black">
+          <ClipboardList className="text-primary" size={20} />
+          Resumo estatistico
+        </h3>
+        <div className="grid grid-cols-2 gap-3">
+          <MetricTile label="Presentes" value={present} tone="green" />
+          <MetricTile label="Ausentes" value={absent} tone="red" />
+          <MetricTile label={statLabel} value={goals} tone="green" />
+          <MetricTile label="Assistencias" value={assists} tone="green" />
         </div>
       </div>
       <div className="relative overflow-hidden rounded-2xl border border-green-200 bg-green-50 p-5 text-green-950 dark:border-green-900/50 dark:bg-green-950/30 dark:text-green-50">
@@ -371,32 +328,53 @@ function SummaryPanel({
             <p className="mt-1 text-sm font-black uppercase text-green-700 dark:text-green-300">{topScorer?.goals ?? 0} {statLower}</p>
           </div>
         </div>
+        <div className="mt-4 rounded-xl bg-white/70 p-3 text-sm font-bold text-green-950 dark:bg-slate-950/40 dark:text-green-50">
+          Garcom da rodada: {topAssistant?.name ?? '-'} ({topAssistant?.assists ?? 0} assist.)
+        </div>
       </div>
     </div>
   )
 }
 
-function SummaryLine({ label, value, tone }: { label: string; value: number; tone: 'green' | 'red' }) {
+function MetricTile({ label, value, tone }: { label: string; value: number; tone: 'green' | 'red' }) {
   return (
-    <div className="grid grid-cols-[1fr_96px] items-center gap-3 px-4 py-3">
-      <p className="font-black uppercase">{label}</p>
-      <span className={`rounded-lg px-4 py-1.5 text-center text-lg font-black text-white ${tone === 'green' ? 'bg-green-700' : 'bg-red-700'}`}>{value}</span>
+    <div className="report-metric rounded-xl border border-border bg-white/70 p-3 text-center dark:bg-slate-950/40">
+      <p className="text-xs font-black uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className={`mt-1 text-3xl font-black ${tone === 'green' ? 'text-green-700' : 'text-red-700'}`}>{value}</p>
     </div>
   )
 }
 
-function ReportRanking({ title, label, rows }: { title: string; label: string; rows: Array<{ name: string; meta: string; value: string }> }) {
+function StatsRankingTable({ title, statPlural, rows }: { title: string; statPlural: string; rows: ReturnType<typeof aggregate> }) {
   return (
     <div className="rounded-2xl border border-border bg-white p-4 dark:bg-slate-950">
-      <h3 className="mb-4 flex items-center gap-2 text-lg font-black">
-        <span className="rounded-full bg-muted px-2 py-1 text-xs font-black text-muted-foreground">{label}</span>
-        {title}
-      </h3>
-      <div className="grid gap-2">
-        {rows.map((row, index) => (
-          <RankingRow key={`${row.name}-${index}`} index={index + 1} name={row.name} meta={row.meta} value={row.value} />
-        ))}
-        {!rows.length && <EmptyStats />}
+      <h3 className="mb-3 text-lg font-black">{title}</h3>
+      <div className="overflow-hidden rounded-xl border border-border">
+        <table className="report-stats-table w-full border-collapse text-sm">
+          <thead className="bg-slate-950 text-white">
+            <tr>
+              <th className="w-12 px-3 py-2 text-left">#</th>
+              <th className="px-3 py-2 text-left">Participante</th>
+              <th className="w-24 px-3 py-2 text-center">{statPlural}</th>
+              <th className="w-28 px-3 py-2 text-center">Assist.</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, index) => (
+              <tr key={row.playerId} className="border-t border-border odd:bg-muted/35">
+                <td className="px-3 py-2 font-black">{index + 1}</td>
+                <td className="px-3 py-2 font-black">{row.name}</td>
+                <td className="px-3 py-2 text-center font-black">{row.goals}</td>
+                <td className="px-3 py-2 text-center font-black">{row.assists}</td>
+              </tr>
+            ))}
+            {!rows.length && (
+              <tr>
+                <td colSpan={4} className="px-3 py-8 text-center text-muted-foreground">Ainda nao ha estatisticas lancadas neste evento.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
   )
@@ -419,19 +397,6 @@ function ResultPanel({ teamResults, teamWinner }: { teamResults: MatchTeamResult
       ) : (
         <EmptyStats text="Nenhum resultado por equipe foi informado no fechamento." />
       )}
-    </div>
-  )
-}
-
-function RankingRow({ index, name, meta, value }: { index: number; name: string; meta: string; value: string }) {
-  return (
-    <div className="grid grid-cols-[42px_1fr_auto] items-center gap-3 rounded-xl border border-border bg-white/70 p-3 dark:bg-slate-950/40">
-      <span className="grid size-9 place-items-center rounded-lg bg-muted text-sm font-black">{index}</span>
-      <div className="min-w-0">
-        <p className="truncate font-black">{name}</p>
-        <p className="text-xs text-muted-foreground">{meta}</p>
-      </div>
-      <span className="rounded-full bg-primary px-3 py-1 text-sm font-black text-white">{value}</span>
     </div>
   )
 }
