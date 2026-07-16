@@ -14,7 +14,7 @@ import { whatsappWebhookRouter } from './whatsapp-webhook.js'
 import { confirmationReminderStages, runConfirmationReminderJob, sendConfirmationForMatch, startConfirmationReminderWorker } from './reminders.js'
 
 const app = express()
-type AuthUser = { id: string; tenant_id: string | null; role: string }
+type AuthUser = { id: string; tenant_id: string | null; role: string; permissions?: Record<string, boolean> | null }
 const corsOrigins = env.CORS_ORIGIN.split(',').map((origin) => origin.trim()).filter(Boolean)
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -153,18 +153,16 @@ function normalizeWhatsApp(value: string) {
 async function getPublicRegistrationConfirmationStage(tenantId: string) {
   const { data, error } = await adminSupabase
     .from('confirmation_schedules')
-    .select('stage_number, days_before, enabled')
+    .select('stage_number, enabled')
     .eq('tenant_id', tenantId)
     .eq('enabled', true)
-    .order('days_before', { ascending: true })
     .order('stage_number', { ascending: true })
 
   if (error && isMissingConfirmationSchedulesError(error.message)) return 2
   if (error) throw error
 
   const rows = data ?? []
-  const eventDayStage = rows.find((row) => Number(row.days_before) === 0)
-  const selectedStage = Number(eventDayStage?.stage_number ?? rows.find((row) => row.stage_number === 2)?.stage_number ?? rows[0]?.stage_number ?? 2)
+  const selectedStage = Number(rows.find((row) => row.stage_number === 2)?.stage_number ?? rows[0]?.stage_number ?? 2)
   if (!Number.isFinite(selectedStage)) return 2
   return Math.max(1, Math.min(5, Math.trunc(selectedStage)))
 }
@@ -198,9 +196,19 @@ app.post('/api/public-registration/:token/players', async (req, res) => {
       .from('players')
       .select('id, whatsapp, whatsapp_normalized')
       .eq('tenant_id', company.id)
-    if (existingError) throw existingError
+    let existingRows: Array<{ id: string; whatsapp: string | null; whatsapp_normalized?: string | null }> | null = existingPlayers
+    if (existingError && isMissingColumnError(existingError.message, 'whatsapp_normalized')) {
+      const { data: legacyExistingPlayers, error: legacyExistingError } = await adminSupabase
+        .from('players')
+        .select('id, whatsapp')
+        .eq('tenant_id', company.id)
+      if (legacyExistingError) throw legacyExistingError
+      existingRows = legacyExistingPlayers
+    } else if (existingError) {
+      throw existingError
+    }
 
-    const exists = (existingPlayers ?? []).some((player) => (player.whatsapp_normalized || normalizeWhatsApp(player.whatsapp ?? '')) === normalized)
+    const exists = (existingRows ?? []).some((player) => (player.whatsapp_normalized || normalizeWhatsApp(player.whatsapp ?? '')) === normalized)
     if (exists) {
       return res.status(409).json({ error: 'Este WhatsApp ja esta cadastrado nesta empresa. Se precisar alterar seus dados, fale com o organizador.' })
     }
@@ -225,13 +233,7 @@ app.post('/api/public-registration/:token/players', async (req, res) => {
       notes: input.position_kind === 'GOLEIRO' ? 'Autoinscricao: goleiro' : 'Autoinscricao: jogador de linha',
     }
 
-    const { data: player, error: insertError } = await adminSupabase
-      .from('players')
-      .insert(basePlayerPayload)
-      .select('id, name, whatsapp')
-      .single()
-
-    if (insertError) throw insertError
+    const player = await insertPublicPlayer(basePlayerPayload)
     if (!player) throw new Error('Nao foi possivel criar o participante.')
 
     const message = [
@@ -266,6 +268,27 @@ app.post('/api/public-registration/:token/players', async (req, res) => {
     return res.status(400).json({ error: error instanceof Error ? error.message : 'Nao foi possivel concluir sua inscricao.' })
   }
 })
+
+async function insertPublicPlayer(basePayload: Record<string, unknown>) {
+  const optionalColumns = ['confirmation_stage', 'whatsapp_normalized', 'first_name', 'last_name'] as const
+  const payload = { ...basePayload }
+
+  for (let attempt = 0; attempt <= optionalColumns.length; attempt += 1) {
+    const { data, error } = await adminSupabase
+      .from('players')
+      .insert(payload)
+      .select('id, name, whatsapp')
+      .single()
+
+    if (!error) return data
+
+    const missingColumn = optionalColumns.find((column) => column in payload && isMissingColumnError(error.message, column))
+    if (!missingColumn) throw error
+    delete payload[missingColumn]
+  }
+
+  throw new Error('Nao foi possivel criar o participante.')
+}
 
 function requireRequestTenantId(user: AuthUser) {
   if (user.tenant_id) return user.tenant_id
@@ -379,6 +402,181 @@ app.post('/api/admin/companies/:companyId/admin-user', requireAuth, requireSuper
   })
 })
 
+const teamPermissionsSchema = z.object({
+  confirmations: z.boolean().default(false),
+  stats: z.boolean().default(false),
+  finance: z.boolean().default(false),
+  settings: z.boolean().default(false),
+})
+
+function canManageTeamUsers(user: AuthUser) {
+  if (user.role === 'ADMINISTRADOR') return true
+  return Boolean(user.permissions?.settings)
+}
+
+function normalizeTeamPermissions(value: unknown) {
+  const parsed = teamPermissionsSchema.safeParse(value ?? {})
+  if (!parsed.success) return { confirmations: false, stats: false, finance: false, settings: false }
+  return parsed.data
+}
+
+app.get('/api/company/users', requireAuth, async (req, res) => {
+  let tenantId: string
+  try {
+    tenantId = requireRequestTenantId(req.user!)
+  } catch (error) {
+    return res.status(400).json({ error: error instanceof Error ? error.message : 'Usuario sem tenant.' })
+  }
+
+  if (!canManageTeamUsers(req.user!)) return res.status(403).json({ error: 'Acesso restrito ao administrador da empresa.' })
+
+  const { data, error } = await adminSupabase
+    .from('profiles')
+    .select('id, full_name, role, phone, permissions, created_at')
+    .eq('tenant_id', tenantId)
+    .in('role', ['ADMINISTRADOR', 'ORGANIZADOR', 'OPERADOR'])
+    .order('created_at', { ascending: true })
+
+  let rows = data
+  if (error && isMissingColumnError(error.message, 'permissions')) {
+    const { data: legacyRows, error: legacyError } = await adminSupabase
+      .from('profiles')
+      .select('id, full_name, role, phone, created_at')
+      .eq('tenant_id', tenantId)
+      .in('role', ['ADMINISTRADOR', 'ORGANIZADOR', 'OPERADOR'])
+      .order('created_at', { ascending: true })
+    if (legacyError) return res.status(500).json({ error: legacyError.message })
+    rows = legacyRows?.map((row) => ({ ...row, permissions: {} }))
+  } else if (error) {
+    return res.status(500).json({ error: error.message })
+  }
+
+  const users = await Promise.all((rows ?? []).map(async (profile) => {
+    const authResult = await adminSupabase.auth.admin.getUserById(profile.id).catch(() => null)
+    return {
+      id: profile.id,
+      full_name: profile.full_name,
+      role: profile.role,
+      phone: profile.phone,
+      created_at: profile.created_at,
+      permissions: normalizeTeamPermissions(profile.permissions),
+      email: authResult?.data?.user?.email ?? null,
+    }
+  }))
+
+  return res.json(users)
+})
+
+app.post('/api/company/users', requireAuth, async (req, res) => {
+  let tenantId: string
+  try {
+    tenantId = requireRequestTenantId(req.user!)
+  } catch (error) {
+    return res.status(400).json({ error: error instanceof Error ? error.message : 'Usuario sem tenant.' })
+  }
+
+  if (!canManageTeamUsers(req.user!)) return res.status(403).json({ error: 'Acesso restrito ao administrador da empresa.' })
+
+  const bodySchema = z.object({
+    full_name: z.string().min(2).max(120),
+    email: z.string().email(),
+    password: z.string().min(6).max(128),
+    role: z.enum(['ADMINISTRADOR', 'ORGANIZADOR', 'OPERADOR']).default('OPERADOR'),
+    permissions: teamPermissionsSchema.default({ confirmations: true, stats: false, finance: false, settings: false }),
+  })
+  const input = bodySchema.parse(req.body)
+
+  const { data: company } = await adminSupabase.from('companies').select('name').eq('id', tenantId).single()
+  const { data: created, error: createError } = await adminSupabase.auth.admin.createUser({
+    email: input.email,
+    password: input.password,
+    email_confirm: true,
+    user_metadata: { full_name: input.full_name, company_name: company?.name ?? 'Agenda Sport' },
+  })
+
+  if (createError || !created.user) {
+    return res.status(400).json({ error: createError?.message ?? 'Nao foi possivel criar o usuario.' })
+  }
+
+  const profilePayload = {
+    id: created.user.id,
+    tenant_id: tenantId,
+    full_name: input.full_name,
+    role: input.role,
+    permissions: input.role === 'ADMINISTRADOR' ? { confirmations: true, stats: true, finance: true, settings: true } : input.permissions,
+  }
+  const { error: profileError } = await adminSupabase.from('profiles').upsert(profilePayload, { onConflict: 'id' })
+
+  if (profileError && isMissingColumnError(profileError.message, 'permissions')) {
+    const { permissions: _permissions, ...legacyPayload } = profilePayload
+    void _permissions
+    const { error: legacyError } = await adminSupabase.from('profiles').upsert(legacyPayload, { onConflict: 'id' })
+    if (legacyError) {
+      await adminSupabase.auth.admin.deleteUser(created.user.id).catch(() => null)
+      return res.status(500).json({ error: legacyError.message })
+    }
+  } else if (profileError) {
+    await adminSupabase.auth.admin.deleteUser(created.user.id).catch(() => null)
+    return res.status(500).json({ error: profileError.message })
+  }
+
+  return res.status(201).json({
+    id: created.user.id,
+    full_name: input.full_name,
+    email: created.user.email,
+    role: input.role,
+    permissions: profilePayload.permissions,
+    tenant_id: tenantId,
+  })
+})
+
+app.patch('/api/company/users/:userId', requireAuth, async (req, res) => {
+  let tenantId: string
+  try {
+    tenantId = requireRequestTenantId(req.user!)
+  } catch (error) {
+    return res.status(400).json({ error: error instanceof Error ? error.message : 'Usuario sem tenant.' })
+  }
+
+  if (!canManageTeamUsers(req.user!)) return res.status(403).json({ error: 'Acesso restrito ao administrador da empresa.' })
+
+  const paramsSchema = z.object({ userId: z.string().uuid() })
+  const bodySchema = z.object({
+    full_name: z.string().min(2).max(120).optional(),
+    role: z.enum(['ADMINISTRADOR', 'ORGANIZADOR', 'OPERADOR']).optional(),
+    permissions: teamPermissionsSchema.optional(),
+  })
+  const { userId } = paramsSchema.parse(req.params)
+  const input = bodySchema.parse(req.body)
+
+  const { data: existing, error: existingError } = await adminSupabase
+    .from('profiles')
+    .select('id, tenant_id, role')
+    .eq('id', userId)
+    .eq('tenant_id', tenantId)
+    .single()
+  if (existingError || !existing) return res.status(404).json({ error: 'Usuario nao encontrado nesta empresa.' })
+
+  const nextRole = input.role ?? existing.role
+  const patch = {
+    ...(input.full_name ? { full_name: input.full_name } : {}),
+    ...(input.role ? { role: input.role } : {}),
+    ...(input.permissions ? { permissions: nextRole === 'ADMINISTRADOR' ? { confirmations: true, stats: true, finance: true, settings: true } : input.permissions } : {}),
+  }
+
+  const { error } = await adminSupabase.from('profiles').update(patch).eq('id', userId).eq('tenant_id', tenantId)
+  if (error && isMissingColumnError(error.message, 'permissions')) {
+    const { permissions: _permissions, ...legacyPatch } = patch
+    void _permissions
+    const { error: legacyError } = await adminSupabase.from('profiles').update(legacyPatch).eq('id', userId).eq('tenant_id', tenantId)
+    if (legacyError) return res.status(500).json({ error: legacyError.message })
+  } else if (error) {
+    return res.status(500).json({ error: error.message })
+  }
+
+  return res.json({ id: userId, ...patch })
+})
+
 app.post('/api/billing/payment-link', requireAuth, async (req, res) => {
   const schema = z.object({
     player_id: z.string().uuid(),
@@ -485,6 +683,10 @@ app.post('/api/billing/monthly/run', requireAuth, async (req, res) => {
 
 function isMissingBillingTableError(message: string) {
   return message.includes('billing_settings') && (message.includes('schema cache') || message.includes('does not exist') || message.includes('relation'))
+}
+
+function isMissingColumnError(message: string, column: string) {
+  return message.includes(column) && (message.includes('column') || message.includes('schema cache'))
 }
 
 function isMissingConfirmationSchedulesError(message: string) {

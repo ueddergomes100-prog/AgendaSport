@@ -4,7 +4,7 @@ import { adminSupabase } from './supabase.js'
 
 declare module 'express-serve-static-core' {
   interface Request {
-    user?: { id: string; tenant_id: string | null; role: string }
+    user?: { id: string; tenant_id: string | null; role: string; permissions?: Record<string, boolean> | null }
   }
 }
 
@@ -17,9 +17,20 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
 
   const { data: profile, error: profileError } = await adminSupabase
     .from('profiles')
-    .select('id, tenant_id, role')
+    .select('id, tenant_id, role, permissions')
     .eq('id', data.user.id)
     .single()
+
+  if (profileError && profileError.message.includes('permissions')) {
+    const { data: legacyProfile, error: legacyProfileError } = await adminSupabase
+      .from('profiles')
+      .select('id, tenant_id, role')
+      .eq('id', data.user.id)
+      .single()
+    if (legacyProfileError || !legacyProfile) return res.status(403).json({ error: 'Perfil nao encontrado.' })
+    req.user = legacyProfile
+    return next()
+  }
 
   if (profileError || !profile) return res.status(403).json({ error: 'Perfil nao encontrado.' })
   req.user = profile

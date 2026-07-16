@@ -1,36 +1,40 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { BellRing, CreditCard, LoaderCircle, Plus, Save, Settings, SlidersHorizontal, Trash2 } from 'lucide-react'
+import { BellRing, CreditCard, LoaderCircle, Plus, Save, Settings, ShieldCheck, SlidersHorizontal, Trash2, UserCog } from 'lucide-react'
 import { Button } from '../components/ui/button'
 import { Card, CardTitle } from '../components/ui/card'
 import { Field, Input, Select } from '../components/ui/field'
 import { AnimatedPage } from '../components/ui/sport'
 import {
+  createCompanyTeamUser,
   getBillingSettings,
+  getCompanyTeamUsers,
   getConfirmationSchedules,
   saveBillingSettings,
   saveConfirmationSchedules,
 } from '../lib/data'
-import type { BillingSettings, ConfirmationSchedule } from '../lib/types'
+import type { BillingSettings, ConfirmationSchedule, PermissionKey, TeamPermissions, UserRole } from '../lib/types'
 import { getErrorMessage } from '../lib/utils'
 
 type EditableSchedule = Pick<ConfirmationSchedule, 'stage_number' | 'days_before' | 'send_time' | 'enabled'>
 
 const defaultSchedules: EditableSchedule[] = [
   { stage_number: 1, days_before: 2, send_time: '16:00', enabled: true },
-  { stage_number: 2, days_before: 0, send_time: '09:00', enabled: true },
-  { stage_number: 3, days_before: 0, send_time: '12:00', enabled: false },
-  { stage_number: 4, days_before: 0, send_time: '15:00', enabled: false },
+  { stage_number: 2, days_before: 2, send_time: '18:00', enabled: true },
+  { stage_number: 3, days_before: 1, send_time: '16:00', enabled: true },
+  { stage_number: 4, days_before: 0, send_time: '09:00', enabled: true },
   { stage_number: 5, days_before: 0, send_time: '18:00', enabled: false },
 ]
 
 export function SettingsPage() {
   const schedules = useQuery({ queryKey: ['confirmation-schedules'], queryFn: getConfirmationSchedules })
   const billing = useQuery({ queryKey: ['billing-settings'], queryFn: getBillingSettings })
+  const teamUsers = useQuery({ queryKey: ['company-team-users'], queryFn: getCompanyTeamUsers })
   const [scheduleDraft, setScheduleDraft] = useState<EditableSchedule[] | null>(null)
   const [billingDraft, setBillingDraft] = useState<Pick<BillingSettings, 'monthly_billing_day' | 'default_provider' | 'auto_charge_casual_players'> | null>(null)
   const [savingSchedules, setSavingSchedules] = useState(false)
   const [savingBilling, setSavingBilling] = useState(false)
+  const [savingTeamUser, setSavingTeamUser] = useState(false)
   const [feedback, setFeedback] = useState('')
 
   const savedScheduleRows = useMemo(() => {
@@ -65,8 +69,8 @@ export function SettingsPage() {
   }
 
   function removeSchedule(stageNumber: number) {
-    if (activeScheduleRows.length <= 2) {
-      setFeedback('Mantenha pelo menos 2 etapas de convocacao ativas.')
+    if (activeScheduleRows.length <= 4) {
+      setFeedback('Mantenha pelo menos 4 etapas de convocacao ativas.')
       return
     }
     updateSchedule(stageNumber, { enabled: false })
@@ -83,7 +87,7 @@ export function SettingsPage() {
     setFeedback('')
     try {
       const enabledCount = scheduleRows.filter((row) => row.enabled).length
-      if (enabledCount < 2) throw new Error('Mantenha pelo menos 2 etapas de convocacao ativas.')
+      if (enabledCount < 4) throw new Error('Mantenha pelo menos 4 etapas de convocacao ativas.')
       if (enabledCount > 5) throw new Error('O limite maximo e de 5 etapas de convocacao.')
       await saveConfirmationSchedules(scheduleRows)
       await schedules.refetch()
@@ -112,6 +116,39 @@ export function SettingsPage() {
     }
   }
 
+  async function submitTeamUser(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setSavingTeamUser(true)
+    setFeedback('')
+    try {
+      const form = new FormData(event.currentTarget)
+      const role = String(form.get('role') || 'OPERADOR') as Extract<UserRole, 'ADMINISTRADOR' | 'ORGANIZADOR' | 'OPERADOR'>
+      const permissions: TeamPermissions = role === 'ADMINISTRADOR'
+        ? { confirmations: true, stats: true, finance: true, settings: true }
+        : {
+          confirmations: form.get('confirmations') === 'on',
+          stats: form.get('stats') === 'on',
+          finance: form.get('finance') === 'on',
+          settings: form.get('settings') === 'on',
+        }
+
+      await createCompanyTeamUser({
+        fullName: String(form.get('full_name') || '').trim(),
+        email: String(form.get('email') || '').trim(),
+        password: String(form.get('password') || ''),
+        role,
+        permissions,
+      })
+      await teamUsers.refetch()
+      event.currentTarget.reset()
+      setFeedback('Acesso da equipe criado com sucesso.')
+    } catch (error) {
+      setFeedback(getErrorMessage(error, 'Nao foi possivel criar o acesso.'))
+    } finally {
+      setSavingTeamUser(false)
+    }
+  }
+
   return (
     <AnimatedPage>
       <section className="premium-panel overflow-hidden rounded-2xl p-6">
@@ -124,7 +161,7 @@ export function SettingsPage() {
             </p>
           </div>
           <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-bold text-green-950 dark:border-green-900/50 dark:bg-green-950/30 dark:text-green-100">
-            2 etapas obrigatorias, 5 no maximo
+            4 etapas obrigatorias, 5 no maximo
           </div>
         </div>
       </section>
@@ -171,7 +208,7 @@ export function SettingsPage() {
                   type="button"
                   variant="ghost"
                   className="min-h-12"
-                  disabled={activeScheduleRows.length <= 2}
+                  disabled={activeScheduleRows.length <= 4}
                   onClick={() => removeSchedule(row.stage_number)}
                 >
                   <Trash2 size={16} />
@@ -248,7 +285,101 @@ export function SettingsPage() {
           </form>
         </Card>
       </div>
+
+      <Card>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <div className="grid size-11 place-items-center rounded-xl bg-slate-950 text-white dark:bg-white dark:text-slate-950">
+              <UserCog size={20} />
+            </div>
+            <div>
+              <CardTitle>Acessos da equipe</CardTitle>
+              <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+                Crie administradores auxiliares para ajudar na chamada, lancamento de sumula, sorteio e financeiro.
+              </p>
+            </div>
+          </div>
+          <span className="rounded-full bg-muted px-3 py-1 text-xs font-black text-muted-foreground">
+            {teamUsers.data?.length ?? 0} acesso(s)
+          </span>
+        </div>
+
+        <form className="mt-5 grid gap-4 rounded-xl border border-border bg-white/70 p-4 dark:bg-slate-950/40" onSubmit={submitTeamUser}>
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <Field label="Nome">
+              <Input name="full_name" required minLength={2} placeholder="Pedro Silva" />
+            </Field>
+            <Field label="E-mail">
+              <Input name="email" required type="email" placeholder="pedro@email.com" />
+            </Field>
+            <Field label="Senha inicial">
+              <Input name="password" required minLength={6} type="password" placeholder="Minimo 6 caracteres" />
+            </Field>
+            <Field label="Perfil">
+              <Select name="role" defaultValue="OPERADOR">
+                <option value="OPERADOR">Operador</option>
+                <option value="ORGANIZADOR">Organizador</option>
+                <option value="ADMINISTRADOR">Administrador total</option>
+              </Select>
+            </Field>
+          </div>
+
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+            <PermissionCheckbox name="confirmations" label="Convocacoes e agenda" defaultChecked />
+            <PermissionCheckbox name="stats" label="Sumula e sorteio" />
+            <PermissionCheckbox name="finance" label="Financeiro" />
+            <PermissionCheckbox name="settings" label="Configuracoes" />
+          </div>
+
+          <Button className="min-h-12 w-full sm:w-fit" disabled={savingTeamUser}>
+            {savingTeamUser ? <LoaderCircle className="animate-spin" size={16} /> : <ShieldCheck size={16} />}
+            {savingTeamUser ? 'Criando acesso...' : 'Criar acesso'}
+          </Button>
+        </form>
+
+        <div className="mt-5 grid gap-3 md:grid-cols-2">
+          {(teamUsers.data ?? []).map((user) => (
+            <div key={user.id} className="rounded-xl border border-border bg-white/75 p-4 dark:bg-slate-950/40">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-lg font-black">{user.full_name}</p>
+                  <p className="mt-1 text-sm font-semibold text-muted-foreground">{user.email ?? 'Sem email retornado'}</p>
+                </div>
+                <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-black text-green-800 dark:bg-green-900/50 dark:text-green-100">{user.role}</span>
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                {permissionEntries.map((item) => (
+                  <span key={item.key} className={`rounded-full px-3 py-1 text-xs font-black ${user.role === 'ADMINISTRADOR' || user.permissions?.[item.key] ? 'bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-100' : 'bg-muted text-muted-foreground'}`}>
+                    {item.label}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ))}
+          {!teamUsers.isLoading && !teamUsers.data?.length && (
+            <p className="rounded-xl border border-dashed border-border p-6 text-center text-sm text-muted-foreground md:col-span-2">
+              Nenhum acesso auxiliar cadastrado ainda.
+            </p>
+          )}
+        </div>
+      </Card>
     </AnimatedPage>
+  )
+}
+
+const permissionEntries: Array<{ key: PermissionKey; label: string }> = [
+  { key: 'confirmations', label: 'Convocacoes' },
+  { key: 'stats', label: 'Sumula' },
+  { key: 'finance', label: 'Financeiro' },
+  { key: 'settings', label: 'Config.' },
+]
+
+function PermissionCheckbox({ name, label, defaultChecked }: { name: PermissionKey; label: string; defaultChecked?: boolean }) {
+  return (
+    <label className="flex min-h-12 items-center gap-3 rounded-xl border border-border bg-muted/35 px-3 py-2 text-sm font-bold">
+      <input name={name} type="checkbox" defaultChecked={defaultChecked} className="size-5 accent-green-700" />
+      <span>{label}</span>
+    </label>
   )
 }
 
@@ -260,6 +391,5 @@ function clampNumber(value: string, min: number, max: number) {
 
 function stageRoleLabel(stageNumber: number) {
   if (stageNumber === 1) return 'Prioridade mensalistas'
-  if (stageNumber === 2) return 'Chamada geral'
-  return 'Etapa extra'
+  return stageNumber === 5 ? 'Chamada geral opcional' : 'Chamada geral'
 }

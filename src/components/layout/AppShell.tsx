@@ -20,12 +20,16 @@ import {
   Zap,
   type LucideIcon,
 } from 'lucide-react'
+import { hasModuleAccess } from '../../lib/permissions'
 import { supabase } from '../../lib/supabase'
-import type { Profile } from '../../lib/types'
+import type { PermissionKey, Profile } from '../../lib/types'
 import { Button } from '../ui/button'
 import { ParticleBackground } from './ParticleBackground'
 
-const superAdminGroups = [
+type ShellNavItem = { to: string; label: string; icon: LucideIcon; permission?: PermissionKey }
+type ShellNavGroup = { label: string; items: ShellNavItem[] }
+
+const superAdminGroups: ShellNavGroup[] = [
   {
     label: 'Gestao da plataforma',
     items: [
@@ -35,23 +39,23 @@ const superAdminGroups = [
   },
 ]
 
-const tenantGroups = [
+const tenantGroups: ShellNavGroup[] = [
   {
     label: 'Operacao',
     items: [
       { to: '/', label: 'Dashboard', icon: ChartNoAxesCombined },
-      { to: '/participantes', label: 'Participantes', icon: Users },
-      { to: '/eventos', label: 'Eventos', icon: Dumbbell },
-      { to: '/agenda', label: 'Agenda', icon: CalendarDays },
-      { to: '/sorteio', label: 'Sorteio', icon: Trophy },
-      { to: '/estatisticas', label: 'Estatisticas', icon: BarChart3 },
+      { to: '/participantes', label: 'Participantes', icon: Users, permission: 'confirmations' },
+      { to: '/eventos', label: 'Eventos', icon: Dumbbell, permission: 'confirmations' },
+      { to: '/agenda', label: 'Agenda', icon: CalendarDays, permission: 'confirmations' },
+      { to: '/sorteio', label: 'Sorteio', icon: Trophy, permission: 'stats' },
+      { to: '/estatisticas', label: 'Estatisticas', icon: BarChart3, permission: 'stats' },
     ],
   },
   {
     label: 'Gestao',
     items: [
-      { to: '/financeiro', label: 'Financeiro', icon: CircleDollarSign },
-      { to: '/configuracoes', label: 'Configuracoes', icon: Settings },
+      { to: '/financeiro', label: 'Financeiro', icon: CircleDollarSign, permission: 'finance' },
+      { to: '/configuracoes', label: 'Configuracoes', icon: Settings, permission: 'settings' },
     ],
   },
 ]
@@ -59,7 +63,11 @@ const tenantGroups = [
 export function AppShell({ profile, darkMode, setDarkMode }: { profile: Profile; darkMode: boolean; setDarkMode: (value: boolean) => void }) {
   const navigate = useNavigate()
   const location = useLocation()
-  const groups = profile.role === 'SUPER_ADMIN' ? superAdminGroups : tenantGroups
+  const groups = profile.role === 'SUPER_ADMIN'
+    ? superAdminGroups
+    : tenantGroups
+      .map((group) => ({ ...group, items: group.items.filter((item) => hasModuleAccess(profile, item.permission)) }))
+      .filter((group) => group.items.length)
   const navItems = groups.flatMap((group) => group.items)
   const mobileNavItems = navItems.slice(0, 5)
   const currentItem = navItems.find((item) => item.to === location.pathname) ?? navItems.find((item) => item.to === '/')
@@ -178,7 +186,7 @@ export function AppShell({ profile, darkMode, setDarkMode }: { profile: Profile;
   )
 }
 
-function NavItem({ item }: { item: { to: string; label: string; icon: LucideIcon } }) {
+function NavItem({ item }: { item: ShellNavItem }) {
   const Icon = item.icon
   return (
     <NavLink to={item.to} end={item.to === '/'} className={({ isActive }) => `nav-link ${isActive ? 'nav-link-active' : ''}`}>

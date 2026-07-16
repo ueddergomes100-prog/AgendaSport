@@ -22,7 +22,7 @@ export function PlayersPage() {
   const [search, setSearch] = useState('')
   const [showForm, setShowForm] = useState(false)
   const [editingPlayer, setEditingPlayer] = useState<Player | null>(null)
-  const [selectedStage, setSelectedStage] = useState(1)
+  const [selectedType, setSelectedType] = useState<Player['type']>('AVULSO')
   const formOpen = showForm || Boolean(editingPlayer)
 
   const roster = useMemo(() => players.data ?? [], [players.data])
@@ -42,13 +42,8 @@ export function PlayersPage() {
   const linePlayers = roster.length - goalkeepers
   const topPlayer = [...roster].sort((a, b) => b.technical_score - a.technical_score)[0]
   const scheduleRows = useMemo(() => normalizeScheduleRows(schedules.data ?? []), [schedules.data])
-  const priorityStageNumber = useMemo(() => getPriorityStageNumber(scheduleRows), [scheduleRows])
-  const generalStageNumber = useMemo(() => getGeneralStageNumber(scheduleRows), [scheduleRows])
-  const selectableScheduleRows = useMemo(
-    () => scheduleRows.filter((row) => row.enabled || row.stage_number === selectedStage),
-    [scheduleRows, selectedStage],
-  )
-  const selectedSchedule = scheduleRows.find((row) => row.stage_number === selectedStage)
+  const selectedStageNumber = selectedType === 'MENSALISTA' ? 1 : 2
+  const selectedSchedule = scheduleRows.find((row) => row.stage_number === selectedStageNumber)
 
   useEffect(() => {
     if (!formOpen) return
@@ -61,14 +56,14 @@ export function PlayersPage() {
 
   function openNewPlayer() {
     setEditingPlayer(null)
-    setSelectedStage(generalStageNumber)
+    setSelectedType('AVULSO')
     setShowForm(true)
     setFeedback('')
   }
 
   function openEditPlayer(player: Player) {
     setEditingPlayer(player)
-    setSelectedStage(clampStage(player.confirmation_stage))
+    setSelectedType(player.type ?? (clampStage(player.confirmation_stage) === 1 ? 'MENSALISTA' : 'AVULSO'))
     setShowForm(false)
     setFeedback('')
   }
@@ -85,7 +80,7 @@ export function PlayersPage() {
     setFeedback('')
     try {
       const form = new FormData(formElement)
-      const confirmationStage = clampStage(form.get('confirmation_stage') || selectedStage)
+      const type = String(form.get('type') || selectedType) as Player['type']
       const payload: Partial<Player> = {
         first_name: String(form.get('first_name')).trim(),
         last_name: String(form.get('last_name')).trim(),
@@ -96,11 +91,11 @@ export function PlayersPage() {
         status: String(form.get('status') || 'ATIVO') as Player['status'],
         suspension_reason: String(form.get('suspension_reason') || '').trim() || null,
         suspended_until: String(form.get('suspended_until') || '') || null,
-        type: confirmationStage === priorityStageNumber ? 'MENSALISTA' : 'AVULSO',
+        type,
         technical_score: Number(form.get('technical_score')),
         primary_position: String(form.get('primary_position')) as Position,
         secondary_position: null,
-        confirmation_stage: confirmationStage,
+        confirmation_stage: type === 'MENSALISTA' ? 1 : 2,
         notes: String(form.get('notes') || '').trim(),
       }
 
@@ -296,13 +291,10 @@ export function PlayersPage() {
                   <option value="SUSPENSO">Suspenso</option>
                 </Select>
               </Field>
-              <Field label="Perfil da convocacao">
-                <Select name="confirmation_stage" value={selectedStage} onChange={(event) => setSelectedStage(clampStage(event.target.value))}>
-                  {selectableScheduleRows.map((row) => (
-                    <option key={row.stage_number} value={row.stage_number}>
-                      Etapa {row.stage_number} - {stageRoleLabel(row.stage_number)}{row.enabled ? '' : ' - inativa'}
-                    </option>
-                  ))}
+              <Field label="Tipo do participante">
+                <Select name="type" value={selectedType} onChange={(event) => setSelectedType(event.target.value as Player['type'])}>
+                  <option value="AVULSO">Avulso / geral</option>
+                  <option value="MENSALISTA">Mensalista / prioridade</option>
                 </Select>
               </Field>
             </div>
@@ -310,7 +302,7 @@ export function PlayersPage() {
             })()}
 
             <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-semibold text-green-950 dark:border-green-900/50 dark:bg-green-950/30 dark:text-green-100">
-              {formatStagePreview(selectedSchedule)}
+              {formatProfilePreview(selectedType, selectedSchedule)}
             </div>
 
             <Field label="Observacoes"><Textarea name="notes" defaultValue={editingPlayer?.notes ?? ''} /></Field>
@@ -421,45 +413,30 @@ function normalizeScheduleRows(rows: ConfirmationSchedule[]) {
       stage_number: stageNumber,
       days_before: row?.days_before ?? defaultStageDays(stageNumber),
       send_time: String(row?.send_time ?? defaultStageTime(stageNumber)).slice(0, 5),
-      enabled: row?.enabled ?? stageNumber <= 2,
+      enabled: row?.enabled ?? stageNumber <= 4,
     }
   })
 }
 
 function defaultStageDays(stageNumber: number) {
   if (stageNumber === 1) return 2
+  if (stageNumber === 2) return 2
+  if (stageNumber === 3) return 1
   return 0
 }
 
 function defaultStageTime(stageNumber: number) {
-  const defaults = ['16:00', '09:00', '12:00', '15:00', '18:00']
+  const defaults = ['16:00', '18:00', '16:00', '09:00', '18:00']
   return defaults[stageNumber - 1] ?? '16:00'
 }
 
-function formatStagePreview(stage?: Pick<ConfirmationSchedule, 'stage_number' | 'days_before' | 'send_time' | 'enabled'>) {
-  if (!stage) return 'Selecione uma etapa para ver quando este participante sera notificado.'
-  if (!stage.enabled) return `Etapa ${stage.stage_number} esta inativa nas configuracoes. Este participante nao recebera convocacao automatica por essa etapa.`
+function formatProfilePreview(type: Player['type'], stage?: Pick<ConfirmationSchedule, 'stage_number' | 'days_before' | 'send_time' | 'enabled'>) {
+  if (!stage) return 'Configure as etapas para ver quando este participante sera chamado.'
   const dayText = stage.days_before === 0 ? 'no dia do evento' : `${stage.days_before} dia${stage.days_before === 1 ? '' : 's'} antes do evento`
-  return `Este participante sera notificado na etapa ${stage.stage_number} (${stageRoleLabel(stage.stage_number)}): ${dayText}, as ${String(stage.send_time).slice(0, 5)}.`
-}
-
-function getPriorityStageNumber(rows: Array<Pick<ConfirmationSchedule, 'stage_number' | 'enabled'>>) {
-  return rows.find((row) => row.enabled && row.stage_number === 1)?.stage_number
-    ?? rows.find((row) => row.enabled)?.stage_number
-    ?? 1
-}
-
-function getGeneralStageNumber(rows: Array<Pick<ConfirmationSchedule, 'stage_number' | 'days_before' | 'enabled'>>) {
-  return rows.find((row) => row.enabled && row.stage_number === 2)?.stage_number
-    ?? rows.find((row) => row.enabled && row.days_before === 0)?.stage_number
-    ?? rows.find((row) => row.enabled)?.stage_number
-    ?? 2
-}
-
-function stageRoleLabel(stageNumber: number) {
-  if (stageNumber === 1) return 'prioridade mensalistas'
-  if (stageNumber === 2) return 'chamada geral'
-  return 'etapa extra'
+  if (type === 'MENSALISTA') {
+    return `Mensalista recebe a prioridade na etapa 1: ${dayText}, as ${String(stage.send_time).slice(0, 5)}. Se nao responder, tambem continua nas chamadas gerais seguintes.`
+  }
+  return `Avulso entra nas chamadas gerais a partir da etapa 2: ${dayText}, as ${String(stage.send_time).slice(0, 5)}.`
 }
 
 function RosterStat({ icon, label, value }: { icon: React.ReactNode; label: string; value: number }) {
@@ -519,7 +496,7 @@ function PlayerRosterCard({ player, deleting, onDelete, onEdit }: { player: Play
 
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-1">
           <InfoPill label="Funcao" value={displayPosition(player.primary_position)} />
-          <InfoPill label="Etapa" value={`Etapa ${clampStage(player.confirmation_stage)}`} />
+          <InfoPill label="Convocacao" value={player.type === 'MENSALISTA' ? 'Prioridade' : 'Geral'} />
           <div className="flex items-center">{<TypePill type={player.type} />}</div>
         </div>
 

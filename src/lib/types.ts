@@ -15,6 +15,16 @@ export type Profile = {
   full_name: string
   role: UserRole
   phone: string | null
+  permissions?: TeamPermissions | null
+}
+
+export type PermissionKey = 'confirmations' | 'stats' | 'finance' | 'settings'
+
+export type TeamPermissions = Partial<Record<PermissionKey, boolean>>
+
+export type TeamUser = Pick<Profile, 'id' | 'tenant_id' | 'full_name' | 'role' | 'phone' | 'permissions'> & {
+  email: string | null
+  created_at: string
 }
 
 export type Company = {

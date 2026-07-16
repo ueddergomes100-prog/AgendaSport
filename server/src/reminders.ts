@@ -3,8 +3,10 @@ import { adminSupabase } from './supabase.js'
 import { sendWhatsAppMessage } from './whatsapp.js'
 
 export const confirmationReminderStages = [
-  { stageNumber: 1, daysBefore: 2, sendTime: '16:00', template: 'CONFIRMACAO_ETAPA_1', label: 'Etapa 1' },
-  { stageNumber: 2, daysBefore: 0, sendTime: '09:00', template: 'CONFIRMACAO_ETAPA_2', label: 'Etapa 2' },
+  { stageNumber: 1, daysBefore: 2, sendTime: '16:00', template: 'CONFIRMACAO_ETAPA_1', label: 'Etapa 1 - prioridade mensalistas' },
+  { stageNumber: 2, daysBefore: 2, sendTime: '18:00', template: 'CONFIRMACAO_ETAPA_2', label: 'Etapa 2 - chamada geral' },
+  { stageNumber: 3, daysBefore: 1, sendTime: '16:00', template: 'CONFIRMACAO_ETAPA_3', label: 'Etapa 3 - chamada geral' },
+  { stageNumber: 4, daysBefore: 0, sendTime: '09:00', template: 'CONFIRMACAO_ETAPA_4', label: 'Etapa 4 - chamada geral' },
 ] as const
 
 const EVENT_TIME_ZONE = 'America/Sao_Paulo'
@@ -101,7 +103,7 @@ function formatTime(value: string) {
 function buildConfirmationMessage(match: MatchRow, attendance: AttendanceRow, stage: ReminderStage) {
   const playerName = attendance.player?.name?.split(' ')[0] ?? 'participante'
   const pickup = match.pickup
-  const title = stage.stageNumber === 1 ? 'Prioridade mensalistas' : stage.stageNumber === 2 ? 'Chamada geral' : 'Reforco de confirmacao'
+  const title = stage.stageNumber === 1 ? 'Prioridade mensalistas' : 'Chamada geral'
   const lines = [
     `Agenda Sport - ${title}`,
     '',
@@ -133,7 +135,7 @@ function buildUnansweredFollowUpMessage(match: MatchRow, attendance: AttendanceR
   const pickup = match.pickup
   const lines = [
     'Agenda Sport - lembrete de resposta',
-    stage.stageNumber === 1 ? 'Prioridade mensalistas' : stage.stageNumber === 2 ? 'Chamada geral' : stage.label,
+    stage.stageNumber === 1 ? 'Prioridade mensalistas' : 'Chamada geral',
     '',
     `Oi, ${playerName}! Ainda estamos aguardando sua resposta para ${pickup?.name ?? match.notes ?? 'o evento'}.`,
     `Data: ${formatDateTime(match.scheduled_at)}`,
@@ -236,7 +238,7 @@ async function getConfirmationSchedules(tenantId: string): Promise<ReminderStage
   if (error) throw error
 
   const rows = (data ?? []).slice(0, 5)
-  if (rows.length < 2) return [...confirmationReminderStages]
+  if (rows.length < 4) return [...confirmationReminderStages]
 
   return rows.map((row) => ({
     stageNumber: row.stage_number,
@@ -362,10 +364,9 @@ function isMissingConfirmationStageColumnError(message: string) {
   return message.includes('confirmation_stage') && (message.includes('column') || message.includes('schema cache'))
 }
 
-function getAttendanceStage(attendance: AttendanceRow) {
-  const parsed = Number(attendance.player?.confirmation_stage ?? 1)
-  if (!Number.isFinite(parsed)) return 1
-  return Math.max(1, Math.min(5, Math.trunc(parsed)))
+function canReceiveStage(attendance: AttendanceRow, stage: ReminderStage) {
+  if (stage.stageNumber === 1) return attendance.player?.type === 'MENSALISTA'
+  return true
 }
 
 function normalizePhone(value: string) {
@@ -384,7 +385,7 @@ async function sendUnansweredFollowUps(match: MatchRow, pendingAttendance: Atten
     const alreadyFollowedUp = await getAlreadySentPlayerIds(match.id, followUpTemplate)
 
     for (const attendance of pendingAttendance) {
-      if (getAttendanceStage(attendance) !== stage.stageNumber) continue
+      if (!canReceiveStage(attendance, stage)) continue
       if (!originalSentPlayerIds.has(attendance.player_id)) continue
 
       if (attendance.player?.status !== 'ATIVO') {
@@ -494,7 +495,7 @@ export async function runConfirmationReminderJob(options: { tenantId?: string | 
         const alreadySent = await getAlreadySentPlayerIds(match.id, stage.template)
 
         for (const attendance of pendingAttendance) {
-          if (getAttendanceStage(attendance) !== stage.stageNumber) continue
+          if (!canReceiveStage(attendance, stage)) continue
 
           if (attendance.player?.status !== 'ATIVO') {
             summary.skippedWithoutWhatsapp += 1
@@ -586,7 +587,7 @@ export async function sendConfirmationForMatch(matchId: string, tenantId?: strin
     const alreadySent = await getAlreadySentPlayerIds(match.id, stage.template)
 
     for (const attendance of pendingAttendance) {
-      if (getAttendanceStage(attendance) !== stage.stageNumber) continue
+      if (!canReceiveStage(attendance, stage)) continue
 
       if (attendance.player?.status !== 'ATIVO') {
         summary.skippedWithoutWhatsapp += 1

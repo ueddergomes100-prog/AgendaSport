@@ -16,6 +16,9 @@ import type {
   PlayerStatRow,
   Profile,
   TeamDrawRecord,
+  TeamPermissions,
+  TeamUser,
+  UserRole,
 } from './types'
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
@@ -293,17 +296,26 @@ export async function createFinanceTransaction(input: Partial<FinanceTransaction
     .insert({ ...input, tenant_id: profile.tenant_id })
     .select()
     .single()
+  if (error && isMissingRelationError(error.message, 'finance_transactions')) {
+    throw new Error('A tabela de movimentacoes financeiras ainda nao existe no Supabase. Rode o patch SQL de producao e tente novamente.')
+  }
   if (error) throw error
   return data as FinanceTransaction
 }
 
 export async function updateFinanceTransaction(id: string, input: Partial<FinanceTransaction>) {
   const { error } = await supabase.from('finance_transactions').update(input).eq('id', id)
+  if (error && isMissingRelationError(error.message, 'finance_transactions')) {
+    throw new Error('A tabela de movimentacoes financeiras ainda nao existe no Supabase. Rode o patch SQL de producao e tente novamente.')
+  }
   if (error) throw error
 }
 
 export async function deleteFinanceTransaction(id: string) {
   const { error } = await supabase.from('finance_transactions').delete().eq('id', id)
+  if (error && isMissingRelationError(error.message, 'finance_transactions')) {
+    throw new Error('A tabela de movimentacoes financeiras ainda nao existe no Supabase. Rode o patch SQL de producao e tente novamente.')
+  }
   if (error) throw error
 }
 
@@ -598,9 +610,9 @@ function isMissingRelationError(message: string, relation: string) {
 function defaultConfirmationSchedules(tenantId: string): ConfirmationSchedule[] {
   return [
     { stage_number: 1, days_before: 2, send_time: '16:00', enabled: true },
-    { stage_number: 2, days_before: 0, send_time: '09:00', enabled: true },
-    { stage_number: 3, days_before: 0, send_time: '12:00', enabled: false },
-    { stage_number: 4, days_before: 0, send_time: '15:00', enabled: false },
+    { stage_number: 2, days_before: 2, send_time: '18:00', enabled: true },
+    { stage_number: 3, days_before: 1, send_time: '16:00', enabled: true },
+    { stage_number: 4, days_before: 0, send_time: '09:00', enabled: true },
     { stage_number: 5, days_before: 0, send_time: '18:00', enabled: false },
   ].map((row) => ({
     id: `default-${row.stage_number}`,
@@ -732,6 +744,78 @@ export async function createCompanyAdminUser(input: { companyId: string; fullNam
 
   const payload = await response.json().catch(() => ({}))
   if (!response.ok) throw new Error(payload.error ?? 'Nao foi possivel criar o acesso.')
+  return payload
+}
+
+export async function getCompanyTeamUsers(): Promise<TeamUser[]> {
+  const { data: session } = await supabase.auth.getSession()
+  const token = session.session?.access_token
+  if (!token) throw new Error('Sessao expirada. Faca login novamente.')
+
+  const response = await fetch(apiUrl('/api/company/users'), {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  const payload = await response.json().catch(() => [])
+  if (!response.ok) throw new Error(payload.error ?? 'Nao foi possivel carregar os acessos da equipe.')
+  return payload
+}
+
+export async function createCompanyTeamUser(input: {
+  fullName: string
+  email: string
+  password: string
+  role: Extract<UserRole, 'ADMINISTRADOR' | 'ORGANIZADOR' | 'OPERADOR'>
+  permissions: TeamPermissions
+}) {
+  const { data: session } = await supabase.auth.getSession()
+  const token = session.session?.access_token
+  if (!token) throw new Error('Sessao expirada. Faca login novamente.')
+
+  const response = await fetch(apiUrl('/api/company/users'), {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      full_name: input.fullName,
+      email: input.email,
+      password: input.password,
+      role: input.role,
+      permissions: input.permissions,
+    }),
+  })
+
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(payload.error ?? 'Nao foi possivel criar o acesso.')
+  return payload
+}
+
+export async function updateCompanyTeamUser(input: {
+  id: string
+  fullName?: string
+  role?: Extract<UserRole, 'ADMINISTRADOR' | 'ORGANIZADOR' | 'OPERADOR'>
+  permissions?: TeamPermissions
+}) {
+  const { data: session } = await supabase.auth.getSession()
+  const token = session.session?.access_token
+  if (!token) throw new Error('Sessao expirada. Faca login novamente.')
+
+  const response = await fetch(apiUrl(`/api/company/users/${input.id}`), {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      full_name: input.fullName,
+      role: input.role,
+      permissions: input.permissions,
+    }),
+  })
+
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(payload.error ?? 'Nao foi possivel atualizar o acesso.')
   return payload
 }
 
