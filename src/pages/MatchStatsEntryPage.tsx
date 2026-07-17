@@ -47,7 +47,7 @@ export function MatchStatsEntryPage() {
       .sort((left, right) => compareTextPtBr(left.player?.name, right.player?.name)),
     [attendance.data],
   )
-  const canLaunchStats = selectedMatch ? isSameLocalDate(new Date(selectedMatch.scheduled_at), new Date()) : false
+  const canLaunchStats = selectedMatch ? canLaunchStatsForMatch(selectedMatch) : false
   const totals = rows.reduce(
     (acc, item) => {
       const saved = statsByPlayerId.get(item.player_id)
@@ -140,7 +140,7 @@ export function MatchStatsEntryPage() {
     event.preventDefault()
     if (!selectedMatch) return
     if (!canLaunchStats) {
-      setFeedback('O lancamento de presenca real e estatisticas so fica liberado no dia do evento.')
+      setFeedback('O lancamento de presenca real e estatisticas fica liberado a partir do horario do evento.')
       return
     }
     setConfirmFinish(true)
@@ -273,13 +273,13 @@ export function MatchStatsEntryPage() {
             <CardTitle className="text-xl font-black">Lancamento dos participantes</CardTitle>
             <p className="mt-1 text-sm text-muted-foreground">Informe presenca, {primaryStatLabels.lowerPlural} e assistencias. Serve para diferentes modalidades esportivas.</p>
           </div>
-          <span className="rounded-md bg-muted px-2 py-1 text-xs font-black">{canLaunchStats ? `${rows.length} elegiveis` : 'Liberado no dia do evento'}</span>
+          <span className="rounded-md bg-muted px-2 py-1 text-xs font-black">{canLaunchStats ? `${rows.length} elegiveis` : 'Liberado apos o horario'}</span>
         </div>
 
         {feedback && <p className="mt-4 rounded-md bg-muted px-3 py-2 text-sm font-semibold text-slate-700 dark:text-slate-200">{feedback}</p>}
         {!canLaunchStats && (
           <p className="mt-4 rounded-lg border border-yellow-200 bg-yellow-50 px-4 py-3 text-sm font-semibold text-yellow-950 dark:border-yellow-900/50 dark:bg-yellow-950/30 dark:text-yellow-100">
-            Este link ja pode ser compartilhado, mas o lancamento real so abre no dia do evento.
+            Este link ja pode ser compartilhado, mas o lancamento real so abre a partir do horario do evento.
           </p>
         )}
 
@@ -408,6 +408,7 @@ function getNextDateForWeekday(weekday: number, startTime: string, from: Date) {
   return date
 }
 
-function isSameLocalDate(left: Date, right: Date) {
-  return left.getFullYear() === right.getFullYear() && left.getMonth() === right.getMonth() && left.getDate() === right.getDate()
+function canLaunchStatsForMatch(match: Pick<Match, 'scheduled_at' | 'status'>) {
+  if (match.status === 'CANCELADA') return false
+  return new Date(match.scheduled_at).getTime() <= Date.now()
 }

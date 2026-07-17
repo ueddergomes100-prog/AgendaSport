@@ -279,44 +279,66 @@ export async function updatePayment(id: string, input: Partial<Payment>) {
 }
 
 export async function getFinanceTransactions(): Promise<FinanceTransaction[]> {
-  const { data, error } = await supabase
-    .from('finance_transactions')
-    .select('*, player:players(id, name)')
-    .order('occurred_on', { ascending: false })
-    .order('created_at', { ascending: false })
-  if (error && isMissingRelationError(error.message, 'finance_transactions')) return []
-  if (error) throw error
-  return data ?? []
+  const { data: session } = await supabase.auth.getSession()
+  const token = session.session?.access_token
+  if (!token) throw new Error('Sessao expirada. Faca login novamente.')
+
+  const response = await fetch(apiUrl('/api/finance/transactions'), {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  const payload = await response.json().catch(() => [])
+  if (!response.ok) throw new Error(payload.error ?? 'Nao foi possivel carregar as movimentacoes financeiras.')
+  return payload
 }
 
 export async function createFinanceTransaction(input: Partial<FinanceTransaction>) {
-  const profile = await requireTenantProfile()
-  const { data, error } = await supabase
-    .from('finance_transactions')
-    .insert({ ...input, tenant_id: profile.tenant_id })
-    .select()
-    .single()
-  if (error && isMissingRelationError(error.message, 'finance_transactions')) {
-    throw new Error('A tabela de movimentacoes financeiras ainda nao existe no Supabase. Rode o patch SQL de producao e tente novamente.')
-  }
-  if (error) throw error
-  return data as FinanceTransaction
+  const { data: session } = await supabase.auth.getSession()
+  const token = session.session?.access_token
+  if (!token) throw new Error('Sessao expirada. Faca login novamente.')
+
+  const response = await fetch(apiUrl('/api/finance/transactions'), {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(input),
+  })
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(payload.error ?? 'Nao foi possivel cadastrar a movimentacao financeira.')
+  return payload as FinanceTransaction
 }
 
 export async function updateFinanceTransaction(id: string, input: Partial<FinanceTransaction>) {
-  const { error } = await supabase.from('finance_transactions').update(input).eq('id', id)
-  if (error && isMissingRelationError(error.message, 'finance_transactions')) {
-    throw new Error('A tabela de movimentacoes financeiras ainda nao existe no Supabase. Rode o patch SQL de producao e tente novamente.')
-  }
-  if (error) throw error
+  const { data: session } = await supabase.auth.getSession()
+  const token = session.session?.access_token
+  if (!token) throw new Error('Sessao expirada. Faca login novamente.')
+
+  const response = await fetch(apiUrl(`/api/finance/transactions/${id}`), {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(input),
+  })
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(payload.error ?? 'Nao foi possivel atualizar a movimentacao financeira.')
 }
 
 export async function deleteFinanceTransaction(id: string) {
-  const { error } = await supabase.from('finance_transactions').delete().eq('id', id)
-  if (error && isMissingRelationError(error.message, 'finance_transactions')) {
-    throw new Error('A tabela de movimentacoes financeiras ainda nao existe no Supabase. Rode o patch SQL de producao e tente novamente.')
+  const { data: session } = await supabase.auth.getSession()
+  const token = session.session?.access_token
+  if (!token) throw new Error('Sessao expirada. Faca login novamente.')
+
+  const response = await fetch(apiUrl(`/api/finance/transactions/${id}`), {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}))
+    throw new Error(payload.error ?? 'Nao foi possivel remover a movimentacao financeira.')
   }
-  if (error) throw error
 }
 
 export async function getConfirmationSchedules(): Promise<ConfirmationSchedule[]> {

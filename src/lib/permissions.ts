@@ -7,7 +7,7 @@ export function hasModuleAccess(profile: Profile, permission?: PermissionKey) {
 
   const permissions = profile.permissions ?? {}
   const hasExplicitPermissionSet = Object.keys(permissions).length > 0
-  if (!hasExplicitPermissionSet) return true
+  if (!hasExplicitPermissionSet) return permission === 'confirmations' || permission === 'stats'
 
   return Boolean(permissions[permission])
 }

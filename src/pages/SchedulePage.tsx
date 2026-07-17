@@ -122,7 +122,8 @@ export function SchedulePage() {
   const invitedPlayerIds = new Set(attendanceRows.map((row) => row.player_id))
   const counts = countAttendance(attendanceRows)
   const roleCounts = countRoleAttendance(attendanceRows)
-  const canLaunchStats = selectedMatch ? isSameLocalDate(new Date(selectedMatch.scheduled_at), new Date()) : false
+  const isSelectedMatchClosed = selectedMatch ? ['ENCERRADA', 'CANCELADA'].includes(selectedMatch.status) : false
+  const canLaunchStats = selectedMatch ? canLaunchStatsForMatch(selectedMatch) : false
 
   function notify(message: string) {
     setToast(message)
@@ -172,6 +173,10 @@ export function SchedulePage() {
     setSavingInvite(true)
     setFeedback('')
     try {
+      if (isSelectedMatchClosed) {
+        setFeedback('Este evento ja foi encerrado ou cancelado. A convocacao fica bloqueada.')
+        return
+      }
       const playerIds = activePlayers.filter((player) => !invitedPlayerIds.has(player.id)).map((player) => player.id)
       if (playerIds.length) await invitePlayersToMatch(selectedMatch.id, playerIds)
       if (selectedMatch.status === 'AGENDADA') await updateMatch(selectedMatch.id, { status: 'ABERTA' })
@@ -183,7 +188,7 @@ export function SchedulePage() {
         summary.skippedWithoutWhatsapp ? `${summary.skippedWithoutWhatsapp} sem WhatsApp` : null,
         summary.errors.length ? `${summary.errors.length} falharam` : null,
       ].filter(Boolean)
-      setFeedback(parts.length ? parts.join(', ') + '.' : 'Convocacao ja estava atualizada.')
+      setFeedback(parts.length ? parts.join(', ') + '.' : 'Nenhuma etapa de convocacao esta vencida agora. O envio automatico segue os horarios configurados.')
     } catch (error) {
       setFeedback(getErrorMessage(error, 'Nao foi possivel convocar os participantes.'))
     } finally {
@@ -317,7 +322,7 @@ export function SchedulePage() {
     event.preventDefault()
     if (!selectedMatch) return
     if (!canLaunchStats) {
-      setFeedback('O lancamento de presenca real e estatisticas so fica liberado no dia do evento.')
+      setFeedback('O lancamento de presenca real e estatisticas fica liberado a partir do horario do evento.')
       return
     }
     setConfirmFinish(true)
@@ -495,7 +500,7 @@ export function SchedulePage() {
                       <p className="mt-1 text-sm text-white/75">{selectedPickup ? `${selectedPickup.place} - linha ${selectedMatch.max_line_players ?? selectedPickup.max_line_players ?? selectedPickup.max_players}, goleiros ${selectedMatch.max_goalkeepers ?? selectedPickup.max_goalkeepers ?? 0}` : 'Evento avulso'}</p>
                     </div>
                     <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-1">
-                      <Button type="button" onClick={callPlayers} disabled={savingInvite || !activePlayers.length}>
+                      <Button type="button" onClick={callPlayers} disabled={savingInvite || !activePlayers.length || isSelectedMatchClosed}>
                         {savingInvite ? <LoaderCircle className="animate-spin" size={16} /> : <Users size={16} />}
                         Enviar WhatsApp
                       </Button>
@@ -581,11 +586,11 @@ export function SchedulePage() {
                     <CardTitle>Lancamento individual</CardTitle>
                     <p className="mt-1 text-sm text-muted-foreground">No dia do evento, marque quem realmente compareceu e informe {primaryStatLabels.lowerPlural} e assistencias.</p>
                   </div>
-                  <span className="rounded-md bg-muted px-2 py-1 text-xs font-black">{canLaunchStats ? `${presentCandidates.length} participantes elegiveis` : 'Liberado no dia do evento'}</span>
+                  <span className="rounded-md bg-muted px-2 py-1 text-xs font-black">{canLaunchStats ? `${presentCandidates.length} participantes elegiveis` : 'Liberado apos o horario'}</span>
                 </div>
                 {!canLaunchStats && (
                   <p className="mt-4 rounded-lg border border-yellow-200 bg-yellow-50 px-4 py-3 text-sm font-semibold text-yellow-950 dark:border-yellow-900/50 dark:bg-yellow-950/30 dark:text-yellow-100">
-                    O lancamento real de presenca e estatisticas fica bloqueado ate o dia do evento.
+                    O lancamento real de presenca e estatisticas fica bloqueado ate chegar o horario do evento.
                   </p>
                 )}
 
@@ -829,8 +834,9 @@ function toTimeOnly(date: Date) {
   return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
 }
 
-function isSameLocalDate(left: Date, right: Date) {
-  return left.getFullYear() === right.getFullYear() && left.getMonth() === right.getMonth() && left.getDate() === right.getDate()
+function canLaunchStatsForMatch(match: Pick<Match, 'scheduled_at' | 'status'>) {
+  if (match.status === 'CANCELADA') return false
+  return new Date(match.scheduled_at).getTime() <= Date.now()
 }
 
 async function copyText(text: string) {

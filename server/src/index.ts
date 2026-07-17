@@ -323,11 +323,16 @@ app.post('/api/messages/whatsapp', requireAuth, async (req, res) => {
   } catch (error) {
     return res.status(400).json({ error: error instanceof Error ? error.message : 'Usuario sem tenant.' })
   }
+  const requiredModule = input.type === 'COBRANCA' ? 'finance' : 'confirmations'
+  if (!canAccessModule(req.user!, requiredModule)) {
+    return res.status(403).json({ error: 'Voce nao tem permissao para enviar esta mensagem.' })
+  }
   const result = await sendWhatsAppMessage({ tenant_id: tenantId, phone: input.phone, type: input.type, message: input.message })
   return res.json(result)
 })
 
-app.get('/api/reminders/confirmation/status', requireAuth, (_req, res) => {
+app.get('/api/reminders/confirmation/status', requireAuth, (req, res) => {
+  if (!canAccessModule(req.user!, 'confirmations')) return res.status(403).json({ error: 'Voce nao tem permissao para acessar convocacoes.' })
   return res.json({
     enabled: env.REMINDER_WORKER_ENABLED,
     interval_minutes: env.REMINDER_INTERVAL_MINUTES,
@@ -338,6 +343,7 @@ app.get('/api/reminders/confirmation/status', requireAuth, (_req, res) => {
 app.post('/api/reminders/confirmation/run', requireAuth, async (req, res) => {
   const tenantId = req.user!.role === 'SUPER_ADMIN' ? null : req.user!.tenant_id
   if (req.user!.role !== 'SUPER_ADMIN' && !tenantId) return res.status(400).json({ error: 'Usuario sem tenant.' })
+  if (!canAccessModule(req.user!, 'confirmations')) return res.status(403).json({ error: 'Voce nao tem permissao para executar convocacoes.' })
 
   const summary = await runConfirmationReminderJob({ tenantId })
   return res.json(summary)
@@ -348,6 +354,7 @@ app.post('/api/matches/:matchId/confirmations/send', requireAuth, async (req, re
   const { matchId } = paramsSchema.parse(req.params)
   const tenantId = req.user!.role === 'SUPER_ADMIN' ? null : req.user!.tenant_id
   if (req.user!.role !== 'SUPER_ADMIN' && !tenantId) return res.status(400).json({ error: 'Usuario sem tenant.' })
+  if (!canAccessModule(req.user!, 'confirmations')) return res.status(403).json({ error: 'Voce nao tem permissao para enviar convocacoes.' })
 
   try {
     const summary = await sendConfirmationForMatch(matchId, tenantId)
@@ -412,6 +419,14 @@ const teamPermissionsSchema = z.object({
 function canManageTeamUsers(user: AuthUser) {
   if (user.role === 'ADMINISTRADOR') return true
   return Boolean(user.permissions?.settings)
+}
+
+function canAccessModule(user: AuthUser, module: 'confirmations' | 'stats' | 'finance' | 'settings') {
+  if (user.role === 'SUPER_ADMIN' || user.role === 'ADMINISTRADOR') return true
+  const permissions = user.permissions ?? {}
+  const hasExplicitPermissionSet = Object.keys(permissions).length > 0
+  if (!hasExplicitPermissionSet) return module === 'confirmations' || module === 'stats'
+  return Boolean(permissions[module])
 }
 
 function normalizeTeamPermissions(value: unknown) {
@@ -508,14 +523,11 @@ app.post('/api/company/users', requireAuth, async (req, res) => {
   const { error: profileError } = await adminSupabase.from('profiles').upsert(profilePayload, { onConflict: 'id' })
 
   if (profileError && isMissingColumnError(profileError.message, 'permissions')) {
-    const { permissions: _permissions, ...legacyPayload } = profilePayload
-    void _permissions
-    const { error: legacyError } = await adminSupabase.from('profiles').upsert(legacyPayload, { onConflict: 'id' })
-    if (legacyError) {
-      await adminSupabase.auth.admin.deleteUser(created.user.id).catch(() => null)
-      return res.status(500).json({ error: legacyError.message })
-    }
-  } else if (profileError) {
+    await adminSupabase.auth.admin.deleteUser(created.user.id).catch(() => null)
+    return res.status(500).json({ error: 'A coluna de permissoes ainda nao existe no Supabase. Rode o patch SQL de producao e tente novamente.' })
+  }
+
+  if (profileError) {
     await adminSupabase.auth.admin.deleteUser(created.user.id).catch(() => null)
     return res.status(500).json({ error: profileError.message })
   }
@@ -566,15 +578,141 @@ app.patch('/api/company/users/:userId', requireAuth, async (req, res) => {
 
   const { error } = await adminSupabase.from('profiles').update(patch).eq('id', userId).eq('tenant_id', tenantId)
   if (error && isMissingColumnError(error.message, 'permissions')) {
-    const { permissions: _permissions, ...legacyPatch } = patch
-    void _permissions
-    const { error: legacyError } = await adminSupabase.from('profiles').update(legacyPatch).eq('id', userId).eq('tenant_id', tenantId)
-    if (legacyError) return res.status(500).json({ error: legacyError.message })
-  } else if (error) {
+    return res.status(500).json({ error: 'A coluna de permissoes ainda nao existe no Supabase. Rode o patch SQL de producao e tente novamente.' })
+  }
+
+  if (error) {
     return res.status(500).json({ error: error.message })
   }
 
   return res.json({ id: userId, ...patch })
+})
+
+app.get('/api/finance/transactions', requireAuth, async (req, res) => {
+  let tenantId: string
+  try {
+    tenantId = requireRequestTenantId(req.user!)
+  } catch (error) {
+    return res.status(400).json({ error: error instanceof Error ? error.message : 'Usuario sem tenant.' })
+  }
+
+  if (!canAccessModule(req.user!, 'finance')) return res.status(403).json({ error: 'Voce nao tem permissao para acessar o financeiro.' })
+
+  const { data, error } = await adminSupabase
+    .from('finance_transactions')
+    .select('*, player:players(id, name)')
+    .eq('tenant_id', tenantId)
+    .order('occurred_on', { ascending: false })
+    .order('created_at', { ascending: false })
+
+  if (error && isMissingFinanceTransactionsError(error.message)) {
+    return res.status(500).json({ error: 'A tabela de movimentacoes financeiras ainda nao existe no Supabase. Rode o patch SQL de producao e tente novamente.' })
+  }
+  if (error) return res.status(500).json({ error: error.message })
+
+  return res.json(data ?? [])
+})
+
+app.post('/api/finance/transactions', requireAuth, async (req, res) => {
+  let tenantId: string
+  try {
+    tenantId = requireRequestTenantId(req.user!)
+  } catch (error) {
+    return res.status(400).json({ error: error instanceof Error ? error.message : 'Usuario sem tenant.' })
+  }
+
+  if (!canAccessModule(req.user!, 'finance')) return res.status(403).json({ error: 'Voce nao tem permissao para lancar movimentacoes financeiras.' })
+
+  const schema = z.object({
+    player_id: z.string().uuid().nullable().optional(),
+    match_id: z.string().uuid().nullable().optional(),
+    payment_id: z.string().uuid().nullable().optional(),
+    kind: z.enum(['RECEITA', 'DESPESA']),
+    category: z.string().min(1).max(80),
+    description: z.string().min(3).max(300),
+    amount: z.coerce.number().positive(),
+    occurred_on: z.string().min(10).max(10),
+    status: z.enum(['CONFIRMADO', 'PENDENTE', 'CANCELADO']).default('CONFIRMADO'),
+  })
+  const input = schema.parse(req.body)
+
+  const { data, error } = await adminSupabase
+    .from('finance_transactions')
+    .insert({ ...input, tenant_id: tenantId })
+    .select('*, player:players(id, name)')
+    .single()
+
+  if (error && isMissingFinanceTransactionsError(error.message)) {
+    return res.status(500).json({ error: 'A tabela de movimentacoes financeiras ainda nao existe no Supabase. Rode o patch SQL de producao e tente novamente.' })
+  }
+  if (error) return res.status(500).json({ error: error.message })
+
+  return res.status(201).json(data)
+})
+
+app.patch('/api/finance/transactions/:transactionId', requireAuth, async (req, res) => {
+  let tenantId: string
+  try {
+    tenantId = requireRequestTenantId(req.user!)
+  } catch (error) {
+    return res.status(400).json({ error: error instanceof Error ? error.message : 'Usuario sem tenant.' })
+  }
+
+  if (!canAccessModule(req.user!, 'finance')) return res.status(403).json({ error: 'Voce nao tem permissao para alterar o financeiro.' })
+
+  const paramsSchema = z.object({ transactionId: z.string().uuid() })
+  const schema = z.object({
+    player_id: z.string().uuid().nullable().optional(),
+    match_id: z.string().uuid().nullable().optional(),
+    payment_id: z.string().uuid().nullable().optional(),
+    kind: z.enum(['RECEITA', 'DESPESA']).optional(),
+    category: z.string().min(1).max(80).optional(),
+    description: z.string().min(3).max(300).optional(),
+    amount: z.coerce.number().positive().optional(),
+    occurred_on: z.string().min(10).max(10).optional(),
+    status: z.enum(['CONFIRMADO', 'PENDENTE', 'CANCELADO']).optional(),
+  })
+  const { transactionId } = paramsSchema.parse(req.params)
+  const input = schema.parse(req.body)
+
+  const { error } = await adminSupabase
+    .from('finance_transactions')
+    .update(input)
+    .eq('id', transactionId)
+    .eq('tenant_id', tenantId)
+
+  if (error && isMissingFinanceTransactionsError(error.message)) {
+    return res.status(500).json({ error: 'A tabela de movimentacoes financeiras ainda nao existe no Supabase. Rode o patch SQL de producao e tente novamente.' })
+  }
+  if (error) return res.status(500).json({ error: error.message })
+
+  return res.json({ id: transactionId })
+})
+
+app.delete('/api/finance/transactions/:transactionId', requireAuth, async (req, res) => {
+  let tenantId: string
+  try {
+    tenantId = requireRequestTenantId(req.user!)
+  } catch (error) {
+    return res.status(400).json({ error: error instanceof Error ? error.message : 'Usuario sem tenant.' })
+  }
+
+  if (!canAccessModule(req.user!, 'finance')) return res.status(403).json({ error: 'Voce nao tem permissao para remover movimentacoes financeiras.' })
+
+  const paramsSchema = z.object({ transactionId: z.string().uuid() })
+  const { transactionId } = paramsSchema.parse(req.params)
+  const { error } = await adminSupabase
+    .from('finance_transactions')
+    .delete()
+    .eq('id', transactionId)
+    .eq('tenant_id', tenantId)
+
+  if (error && isMissingFinanceTransactionsError(error.message)) {
+    return res.status(500).json({ error: 'A tabela de movimentacoes financeiras ainda nao existe no Supabase. Rode o patch SQL de producao e tente novamente.' })
+  }
+  if (error) return res.status(500).json({ error: error.message })
+
+  return res.status(204).send()
 })
 
 app.post('/api/billing/payment-link', requireAuth, async (req, res) => {
@@ -591,6 +729,7 @@ app.post('/api/billing/payment-link', requireAuth, async (req, res) => {
   } catch (error) {
     return res.status(400).json({ error: error instanceof Error ? error.message : 'Usuario sem tenant.' })
   }
+  if (!canAccessModule(req.user!, 'finance')) return res.status(403).json({ error: 'Voce nao tem permissao para gerar cobrancas.' })
   const { data, error } = await adminSupabase
     .from('payments')
     .insert({
@@ -615,6 +754,7 @@ app.post('/api/billing/monthly/run', requireAuth, async (req, res) => {
   } catch (error) {
     return res.status(400).json({ error: error instanceof Error ? error.message : 'Usuario sem tenant.' })
   }
+  if (!canAccessModule(req.user!, 'finance')) return res.status(403).json({ error: 'Voce nao tem permissao para gerar mensalidades.' })
 
   const { data: settings, error: settingsError } = await adminSupabase
     .from('billing_settings')
@@ -683,6 +823,10 @@ app.post('/api/billing/monthly/run', requireAuth, async (req, res) => {
 
 function isMissingBillingTableError(message: string) {
   return message.includes('billing_settings') && (message.includes('schema cache') || message.includes('does not exist') || message.includes('relation'))
+}
+
+function isMissingFinanceTransactionsError(message: string) {
+  return message.includes('finance_transactions') && (message.includes('schema cache') || message.includes('does not exist') || message.includes('relation'))
 }
 
 function isMissingColumnError(message: string, column: string) {
