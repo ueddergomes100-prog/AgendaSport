@@ -9,13 +9,16 @@ import { z } from 'zod'
 import { env } from './env.js'
 import { requireAuth, requireSuperAdmin } from './auth.js'
 import {
+  connectTenantAsaasAccount,
   createPaymentCharge,
   ensureCasualChargeForConfirmation,
-  getBillingProviderStatus,
+  getTenantBillingProviderStatus,
+  refreshTenantAsaasAccount,
   releasePlayerAfterPayment,
   runMonthlyBillingForTenant,
   sendPaymentChargeMessage,
   startBillingWorker,
+  type AsaasSubaccountInput,
   type BillingProvider,
 } from './billing.js'
 import {
@@ -68,6 +71,13 @@ app.use(helmet())
 app.use(cors({ origin: corsOrigins.length > 1 ? corsOrigins : corsOrigins[0], credentials: true }))
 app.use(express.json({ limit: '1mb' }))
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, limit: 300 }))
+const paymentAccountLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Muitas tentativas de conexao financeira. Aguarde e tente novamente.' },
+})
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', service: 'Agenda Sport API' })
@@ -950,11 +960,89 @@ app.post('/api/payments', requireAuth, async (req, res) => {
   }
 })
 
-app.get('/api/billing/providers/status', requireAuth, (req, res) => {
+app.get('/api/billing/providers/status', requireAuth, async (req, res) => {
   if (!canAccessModule(req.user!, 'finance') && !canAccessModule(req.user!, 'settings')) {
     return res.status(403).json({ error: 'Voce nao tem permissao para consultar os gateways.' })
   }
-  return res.json(getBillingProviderStatus())
+  let tenantId: string
+  try {
+    tenantId = requireRequestTenantId(req.user!)
+    return res.json(await getTenantBillingProviderStatus(tenantId))
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : 'Nao foi possivel consultar os gateways.' })
+  }
+})
+
+const asaasSubaccountSchema = z.object({
+  name: z.string().trim().min(3).max(120),
+  email: z.string().trim().email(),
+  loginEmail: z.string().trim().email().optional().or(z.literal('')),
+  cpfCnpj: z.string().min(11).max(18),
+  birthDate: z.string().date().optional().or(z.literal('')),
+  companyType: z.enum(['MEI', 'LIMITED', 'INDIVIDUAL', 'ASSOCIATION']).optional(),
+  mobilePhone: z.string().min(10).max(20),
+  incomeValue: z.coerce.number().positive().max(999999999),
+  address: z.string().trim().min(3).max(120),
+  addressNumber: z.string().trim().min(1).max(20),
+  complement: z.string().trim().max(60).optional().or(z.literal('')),
+  province: z.string().trim().min(2).max(80),
+  postalCode: z.string().min(8).max(10),
+}).superRefine((input, context) => {
+  const document = input.cpfCnpj.replace(/\D/g, '')
+  if (document.length !== 11 && document.length !== 14) {
+    context.addIssue({ code: 'custom', path: ['cpfCnpj'], message: 'Informe um CPF ou CNPJ valido.' })
+  }
+  if (document.length === 11 && !input.birthDate) {
+    context.addIssue({ code: 'custom', path: ['birthDate'], message: 'Informe a data de nascimento.' })
+  }
+  if (document.length === 14 && !input.companyType) {
+    context.addIssue({ code: 'custom', path: ['companyType'], message: 'Informe o tipo da empresa.' })
+  }
+})
+
+app.post('/api/billing/accounts/asaas', paymentAccountLimiter, requireAuth, async (req, res) => {
+  let tenantId: string
+  try {
+    tenantId = requireRequestTenantId(req.user!)
+  } catch (error) {
+    return res.status(400).json({ error: error instanceof Error ? error.message : 'Usuario sem tenant.' })
+  }
+  if (req.user!.role !== 'ADMINISTRADOR') {
+    return res.status(403).json({ error: 'Somente o administrador da empresa pode conectar a conta de recebimento.' })
+  }
+
+  const parsed = asaasSubaccountSchema.safeParse(req.body)
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Revise os dados da conta.' })
+  }
+
+  try {
+    return res.status(201).json(await connectTenantAsaasAccount(
+      tenantId,
+      req.user!.id,
+      parsed.data as AsaasSubaccountInput,
+    ))
+  } catch (error) {
+    return res.status(502).json({ error: error instanceof Error ? error.message : 'Nao foi possivel conectar a conta Asaas.' })
+  }
+})
+
+app.post('/api/billing/accounts/asaas/refresh', requireAuth, async (req, res) => {
+  let tenantId: string
+  try {
+    tenantId = requireRequestTenantId(req.user!)
+  } catch (error) {
+    return res.status(400).json({ error: error instanceof Error ? error.message : 'Usuario sem tenant.' })
+  }
+  if (req.user!.role !== 'ADMINISTRADOR') {
+    return res.status(403).json({ error: 'Somente o administrador da empresa pode atualizar a conta de recebimento.' })
+  }
+
+  try {
+    return res.json(await refreshTenantAsaasAccount(tenantId))
+  } catch (error) {
+    return res.status(502).json({ error: error instanceof Error ? error.message : 'Nao foi possivel atualizar a conta Asaas.' })
+  }
 })
 
 app.post('/api/payments/:paymentId/send', requireAuth, async (req, res) => {

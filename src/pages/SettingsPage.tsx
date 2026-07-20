@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { BellRing, CheckCircle2, Copy, CreditCard, LoaderCircle, MessageCircle, Pencil, Plus, Save, Settings, ShieldCheck, SlidersHorizontal, Trash2, TriangleAlert, UserCog } from 'lucide-react'
+import { BellRing, Building2, CheckCircle2, Copy, CreditCard, LoaderCircle, MessageCircle, Pencil, Plus, RefreshCw, Save, Settings, ShieldCheck, SlidersHorizontal, Trash2, TriangleAlert, UserCog } from 'lucide-react'
 import { Button } from '../components/ui/button'
 import { Card, CardTitle } from '../components/ui/card'
 import { Field, Input, Select } from '../components/ui/field'
 import { AnimatedPage, PremiumModal } from '../components/ui/sport'
 import {
+  connectAsaasAccount,
   createCompanyTeamUser,
   getBillingProviderStatus,
   getBillingSettings,
@@ -13,12 +14,13 @@ import {
   getCompanyTeamUsers,
   getConfirmationSchedules,
   getProfile,
+  refreshAsaasAccount,
   saveBillingSettings,
   saveCompanyIntegration,
   saveConfirmationSchedules,
   updateCompanyTeamUser,
 } from '../lib/data'
-import type { BillingSettings, CompanyIntegration, ConfirmationSchedule, PermissionKey, TeamPermissions, TeamUser, UserRole } from '../lib/types'
+import type { AsaasAccountInput, BillingSettings, CompanyIntegration, ConfirmationSchedule, PermissionKey, TeamPermissions, TeamUser, UserRole } from '../lib/types'
 import { getErrorMessage } from '../lib/utils'
 
 type EditableSchedule = Pick<ConfirmationSchedule, 'stage_number' | 'days_before' | 'send_time' | 'enabled'>
@@ -56,6 +58,10 @@ export function SettingsPage() {
   const [savingBilling, setSavingBilling] = useState(false)
   const [savingTeamUser, setSavingTeamUser] = useState(false)
   const [savingIntegration, setSavingIntegration] = useState(false)
+  const [asaasModalOpen, setAsaasModalOpen] = useState(false)
+  const [asaasDocument, setAsaasDocument] = useState('')
+  const [connectingAsaas, setConnectingAsaas] = useState(false)
+  const [refreshingAsaas, setRefreshingAsaas] = useState(false)
   const [feedback, setFeedback] = useState('')
 
   const savedScheduleRows = useMemo(() => {
@@ -95,6 +101,7 @@ export function SettingsPage() {
   const integrationForm = integrationDraft ?? savedIntegrationForm
   const activeScheduleRows = scheduleRows.filter((row) => row.enabled)
   const nextDisabledSchedule = scheduleRows.find((row) => !row.enabled)
+  const asaasDocumentDigits = asaasDocument.replace(/\D/g, '')
 
   function updateSchedule(stageNumber: number, patch: Partial<EditableSchedule>) {
     setScheduleDraft(scheduleRows.map((row) => row.stage_number === stageNumber ? { ...row, ...patch } : row))
@@ -157,6 +164,52 @@ export function SettingsPage() {
       setFeedback(getErrorMessage(error, 'Nao foi possivel salvar as configuracoes financeiras.'))
     } finally {
       setSavingBilling(false)
+    }
+  }
+
+  async function submitAsaasAccount(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setConnectingAsaas(true)
+    setFeedback('')
+    try {
+      const form = new FormData(event.currentTarget)
+      const input: AsaasAccountInput = {
+        name: String(form.get('name') || '').trim(),
+        email: String(form.get('email') || '').trim(),
+        loginEmail: String(form.get('loginEmail') || '').trim() || undefined,
+        cpfCnpj: asaasDocument,
+        birthDate: String(form.get('birthDate') || '') || undefined,
+        companyType: (String(form.get('companyType') || '') || undefined) as AsaasAccountInput['companyType'],
+        mobilePhone: String(form.get('mobilePhone') || '').trim(),
+        incomeValue: Number(form.get('incomeValue') || 0),
+        address: String(form.get('address') || '').trim(),
+        addressNumber: String(form.get('addressNumber') || '').trim(),
+        complement: String(form.get('complement') || '').trim() || undefined,
+        province: String(form.get('province') || '').trim(),
+        postalCode: String(form.get('postalCode') || '').trim(),
+      }
+      await connectAsaasAccount(input)
+      await gatewayStatus.refetch()
+      setAsaasModalOpen(false)
+      setFeedback('Conta Asaas conectada. As novas cobrancas serao repassadas para esta empresa.')
+    } catch (error) {
+      setFeedback(getErrorMessage(error, 'Nao foi possivel conectar a conta Asaas.'))
+    } finally {
+      setConnectingAsaas(false)
+    }
+  }
+
+  async function refreshAsaasStatus() {
+    setRefreshingAsaas(true)
+    setFeedback('')
+    try {
+      await refreshAsaasAccount()
+      await gatewayStatus.refetch()
+      setFeedback('Dados da conta Asaas atualizados.')
+    } catch (error) {
+      setFeedback(getErrorMessage(error, 'Nao foi possivel atualizar a conta Asaas.'))
+    } finally {
+      setRefreshingAsaas(false)
     }
   }
 
@@ -395,7 +448,58 @@ export function SettingsPage() {
           </form>
 
           <div className="mt-5 border-t border-border pt-5">
-            <p className="text-sm font-black">Status dos gateways</p>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-black">Conta de recebimento da empresa</p>
+                <p className="mt-1 text-xs text-muted-foreground">Todos os administradores autorizados usam a mesma carteira financeira desta empresa.</p>
+              </div>
+              {canManageTeamUsers && (
+                gatewayStatus.data?.tenant_account?.connected ? (
+                  <Button type="button" variant="ghost" className="h-10 px-3" disabled={refreshingAsaas} onClick={refreshAsaasStatus}>
+                    <RefreshCw className={refreshingAsaas ? 'animate-spin' : ''} size={15} />
+                    Atualizar
+                  </Button>
+                ) : (
+                  <Button type="button" className="h-10 px-3" onClick={() => setAsaasModalOpen(true)}>
+                    <Building2 size={16} />
+                    Conectar Asaas
+                  </Button>
+                )
+              )}
+            </div>
+
+            <div className="mt-3 rounded-xl border border-border bg-muted/40 p-4">
+              {gatewayStatus.data?.tenant_account?.connected ? (
+                <div className="flex items-start gap-3">
+                  <CheckCircle2 className="mt-0.5 shrink-0 text-green-700" size={19} />
+                  <div className="min-w-0">
+                    <p className="font-black">{gatewayStatus.data.tenant_account.account_name || 'Conta Asaas vinculada'}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {gatewayStatus.data.tenant_account.account_email || 'E-mail nao informado'}
+                      {gatewayStatus.data.tenant_account.document_last4 ? ` - documento final ${gatewayStatus.data.tenant_account.document_last4}` : ''}
+                    </p>
+                    <p className="mt-2 text-xs font-semibold text-green-800">
+                      Repasse de {gatewayStatus.data.tenant_account.split_percentage}% do valor liquido para a carteira final {gatewayStatus.data.tenant_account.wallet_suffix}.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-start gap-3">
+                  <TriangleAlert className="mt-0.5 shrink-0 text-amber-700" size={19} />
+                  <div>
+                    <p className="font-black">Nenhuma conta recebedora vinculada</p>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                      O Asaas so podera ser selecionado depois que a empresa conectar sua propria conta. A Agenda Sport nao mistura saldos entre clientes.
+                    </p>
+                    {gatewayStatus.data?.tenant_account?.last_error && (
+                      <p className="mt-2 text-xs font-semibold text-red-700">{gatewayStatus.data.tenant_account.last_error}</p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <p className="mt-5 text-sm font-black">Infraestrutura dos gateways</p>
             <div className="mt-3 grid gap-3">
               {(['ASAAS', 'MERCADO_PAGO'] as const).map((provider) => {
                 const status = gatewayStatus.data?.providers[provider]
@@ -406,10 +510,16 @@ export function SettingsPage() {
                       <div className="flex items-center gap-2">
                         {status?.ready ? <CheckCircle2 className="text-green-700" size={17} /> : <TriangleAlert className="text-amber-700" size={17} />}
                         <strong className="text-sm">{label}</strong>
-                        <span className="text-xs font-semibold text-muted-foreground">{status?.ready ? 'Pronto' : 'Pendente'}</span>
+                        <span className="text-xs font-semibold text-muted-foreground">
+                          {status?.ready ? 'Pronto' : provider === 'MERCADO_PAGO' ? 'OAuth por empresa pendente' : 'Pendente'}
+                        </span>
                       </div>
                       {status?.webhook_url && <p className="mt-2 truncate font-mono text-xs text-muted-foreground">{status.webhook_url}</p>}
-                      {status?.missing.length ? <p className="mt-1 text-xs text-amber-800">Faltando no servidor: {status.missing.join(', ')}</p> : null}
+                      {status?.missing.length ? (
+                        <p className="mt-1 text-xs text-amber-800">
+                          Pendente: {status.missing.map(billingRequirementLabel).join(', ')}
+                        </p>
+                      ) : null}
                     </div>
                     {status?.webhook_url && (
                       <Button
@@ -561,6 +671,92 @@ export function SettingsPage() {
         </div>
       </Card>}
 
+      {canManageTeamUsers && asaasModalOpen && (
+        <PremiumModal
+          title="Conectar conta Asaas"
+          kicker="Recebimento da empresa"
+          icon={Building2}
+          onClose={() => setAsaasModalOpen(false)}
+          maxWidth="max-w-3xl"
+        >
+          <form className="grid gap-4" onSubmit={submitAsaasAccount}>
+            <p className="rounded-xl border border-green-200 bg-green-50 p-4 text-sm leading-6 text-green-950">
+              A conta sera vinculada somente a esta empresa. As novas cobrancas usarao o identificador da carteira para repassar o valor liquido sem misturar recebimentos de outros clientes.
+            </p>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Nome do titular ou razao social">
+                <Input name="name" required minLength={3} autoComplete="organization" />
+              </Field>
+              <Field label="E-mail da conta">
+                <Input name="email" required type="email" autoComplete="email" />
+              </Field>
+              <Field label="E-mail de acesso">
+                <Input name="loginEmail" type="email" placeholder="Opcional: usa o e-mail acima" />
+              </Field>
+              <Field label="CPF ou CNPJ">
+                <Input
+                  name="cpfCnpj"
+                  required
+                  inputMode="numeric"
+                  value={asaasDocument}
+                  onChange={(event) => setAsaasDocument(event.target.value)}
+                  placeholder="Somente numeros ou formatado"
+                />
+              </Field>
+              {asaasDocumentDigits.length === 11 ? (
+                <Field label="Data de nascimento">
+                  <Input name="birthDate" required type="date" />
+                </Field>
+              ) : (
+                <Field label="Tipo da empresa">
+                  <Select name="companyType" required={asaasDocumentDigits.length === 14} defaultValue="">
+                    <option value="">Selecione</option>
+                    <option value="MEI">MEI</option>
+                    <option value="LIMITED">Sociedade limitada</option>
+                    <option value="INDIVIDUAL">Empresario individual</option>
+                    <option value="ASSOCIATION">Associacao</option>
+                  </Select>
+                </Field>
+              )}
+              <Field label="Celular">
+                <Input name="mobilePhone" required inputMode="tel" autoComplete="tel" placeholder="(33) 99999-9999" />
+              </Field>
+              <Field label="Faturamento ou renda mensal">
+                <Input name="incomeValue" required type="number" min={1} step="0.01" inputMode="decimal" />
+              </Field>
+              <Field label="CEP">
+                <Input name="postalCode" required inputMode="numeric" autoComplete="postal-code" placeholder="00000-000" />
+              </Field>
+              <Field label="Logradouro">
+                <Input name="address" required autoComplete="street-address" />
+              </Field>
+              <Field label="Numero">
+                <Input name="addressNumber" required inputMode="numeric" />
+              </Field>
+              <Field label="Bairro">
+                <Input name="province" required />
+              </Field>
+              <Field label="Complemento">
+                <Input name="complement" placeholder="Opcional" />
+              </Field>
+            </div>
+
+            <p className="text-xs leading-5 text-muted-foreground">
+              Os dados cadastrais sao enviados diretamente ao Asaas. A Agenda Sport guarda apenas o nome, e-mail, final do documento e identificadores tecnicos da carteira; a chave privada retornada pela criacao nao e exibida nem salva.
+            </p>
+
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={() => setAsaasModalOpen(false)}>Cancelar</Button>
+              <Button disabled={connectingAsaas}>
+                {connectingAsaas ? <LoaderCircle className="animate-spin" size={16} /> : <ShieldCheck size={16} />}
+                {connectingAsaas ? 'Conectando...' : 'Criar e conectar conta'}
+              </Button>
+            </div>
+          </form>
+        </PremiumModal>
+      )}
+
       {canManageTeamUsers && editingTeamUser && (
         <PremiumModal title={`Permissoes de ${editingTeamUser.full_name}`} kicker="Acesso da equipe" icon={UserCog} onClose={() => setEditingTeamUser(null)}>
           <div className="grid gap-4">
@@ -615,6 +811,17 @@ const permissionEntries: Array<{ key: PermissionKey; label: string }> = [
 
 function fullPermissions(): TeamPermissions {
   return Object.fromEntries(permissionEntries.map((item) => [item.key, true]))
+}
+
+function billingRequirementLabel(value: string) {
+  const labels: Record<string, string> = {
+    ASAAS_API_KEY: 'conta raiz Asaas',
+    ASAAS_WEBHOOK_TOKEN: 'token do webhook',
+    PUBLIC_API_URL: 'URL publica da API',
+    ASAAS_TENANT_ACCOUNT: 'conta recebedora da empresa',
+    MERCADO_PAGO_TENANT_OAUTH: 'conexao individual do Mercado Pago',
+  }
+  return labels[value] ?? value
 }
 
 function PermissionCheckbox({ name, label, defaultChecked }: { name: PermissionKey; label: string; defaultChecked?: boolean }) {

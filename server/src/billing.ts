@@ -1,10 +1,42 @@
-import { createHash } from 'node:crypto'
 import { env } from './env.js'
 import { adminSupabase } from './supabase.js'
 import { sendWhatsAppMessage } from './whatsapp.js'
 
 export type BillingProvider = 'MANUAL_PIX' | 'ASAAS' | 'MERCADO_PAGO'
 export type PaymentStatus = 'PENDENTE' | 'PAGO' | 'ATRASADO' | 'CANCELADO'
+export type PaymentAccountStatus = 'PENDENTE' | 'VINCULADA' | 'BLOQUEADA' | 'ERRO'
+
+export type AsaasSubaccountInput = {
+  name: string
+  email: string
+  loginEmail?: string
+  cpfCnpj: string
+  birthDate?: string
+  companyType?: 'MEI' | 'LIMITED' | 'INDIVIDUAL' | 'ASSOCIATION'
+  mobilePhone: string
+  incomeValue: number
+  address: string
+  addressNumber: string
+  complement?: string
+  province: string
+  postalCode: string
+}
+
+type TenantPaymentAccountRow = {
+  id: string
+  tenant_id: string
+  provider: 'ASAAS'
+  provider_account_id: string | null
+  wallet_id: string | null
+  status: PaymentAccountStatus
+  account_name: string | null
+  account_email: string | null
+  document_last4: string | null
+  split_percentage: number
+  last_error: string | null
+  created_at: string
+  updated_at: string
+}
 
 type PaymentDeliveryStatus = 'NOT_REQUESTED' | 'SKIPPED_ALREADY_EXISTS' | 'SKIPPED_NO_WHATSAPP' | string
 
@@ -17,6 +49,31 @@ type CreateChargeInput = {
   provider: BillingProvider
   description: string
   sendMessage?: boolean
+}
+
+export function buildAsaasPaymentPayload(input: {
+  customerId: string
+  amount: number
+  dueDate: string
+  description: string
+  externalReference: string
+  walletId: string
+  splitPercentage: number
+}) {
+  return {
+    customer: input.customerId,
+    billingType: 'PIX',
+    value: input.amount,
+    dueDate: input.dueDate,
+    description: input.description,
+    externalReference: input.externalReference,
+    split: [{
+      walletId: input.walletId,
+      percentualValue: input.splitPercentage,
+      externalReference: input.externalReference,
+      description: `Repasse Agenda Sport - ${input.description}`,
+    }],
+  }
 }
 
 export async function createPaymentCharge(input: CreateChargeInput) {
@@ -57,6 +114,13 @@ export async function createPaymentCharge(input: CreateChargeInput) {
   if (playerError || !player) throw new Error('Participante nao encontrado para gerar a cobranca.')
   if (companyError || !company) throw new Error('Empresa nao encontrada para gerar a cobranca.')
 
+  const asaasAccount = input.provider === 'ASAAS'
+    ? await requireTenantAsaasAccount(input.tenantId)
+    : null
+  if (input.provider === 'MERCADO_PAGO') {
+    throw new Error('Mercado Pago ainda exige a conexao individual da conta da empresa. Use Asaas ou PIX manual.')
+  }
+
   const providerResult = input.provider === 'ASAAS'
     ? await createAsaasCharge({
       name: player.name,
@@ -66,16 +130,16 @@ export async function createPaymentCharge(input: CreateChargeInput) {
       dueDate: input.dueDate,
       description: input.description,
       externalReference: `${input.tenantId}:${input.matchId ?? `monthly:${input.dueDate}`}:${input.playerId}`,
+      walletId: asaasAccount!.wallet_id!,
+      splitPercentage: Number(asaasAccount!.split_percentage),
     })
-    : input.provider === 'MERCADO_PAGO'
-      ? await createMercadoPagoCharge({
-        email: player.email || company.email,
-        amount: input.amount,
-        dueDate: input.dueDate,
-        description: input.description,
-        externalReference: `${input.tenantId}:${input.matchId ?? `monthly:${input.dueDate}`}:${input.playerId}`,
-      })
-      : { providerPaymentId: null, checkoutUrl: null, pixCode: null }
+    : {
+      providerPaymentId: null,
+      checkoutUrl: null,
+      pixCode: null,
+      recipientWalletId: null,
+      splitPercentage: null,
+    }
 
   const { data: payment, error } = await adminSupabase
     .from('payments')
@@ -90,6 +154,8 @@ export async function createPaymentCharge(input: CreateChargeInput) {
       status: 'PENDENTE',
       checkout_url: providerResult.checkoutUrl,
       pix_code: providerResult.pixCode,
+      recipient_wallet_id: providerResult.recipientWalletId,
+      split_percentage: providerResult.splitPercentage,
     })
     .select()
     .single()
@@ -169,15 +235,12 @@ export function getBillingProviderStatus() {
     !env.ASAAS_WEBHOOK_TOKEN ? 'ASAAS_WEBHOOK_TOKEN' : null,
     !publicApiUrl ? 'PUBLIC_API_URL' : null,
   ].filter((value): value is string => Boolean(value))
-  const mercadoPagoMissing = [
-    !env.MERCADO_PAGO_ACCESS_TOKEN ? 'MERCADO_PAGO_ACCESS_TOKEN' : null,
-    !env.MERCADO_PAGO_WEBHOOK_SECRET ? 'MERCADO_PAGO_WEBHOOK_SECRET' : null,
-    !publicApiUrl ? 'PUBLIC_API_URL' : null,
-  ].filter((value): value is string => Boolean(value))
+  const mercadoPagoMissing = ['MERCADO_PAGO_TENANT_OAUTH']
 
   return {
     public_api_url: publicApiUrl,
     whatsapp_billing_template_configured: Boolean(env.WHATSAPP_BILLING_TEMPLATE_NAME),
+    tenant_account: null,
     providers: {
       MANUAL_PIX: {
         charges_enabled: true,
@@ -194,14 +257,206 @@ export function getBillingProviderStatus() {
         webhook_url: publicApiUrl ? `${publicApiUrl}/api/webhooks/payments/asaas` : null,
       },
       MERCADO_PAGO: {
-        charges_enabled: Boolean(env.MERCADO_PAGO_ACCESS_TOKEN),
+        charges_enabled: false,
         webhook_ready: Boolean(env.MERCADO_PAGO_WEBHOOK_SECRET && publicApiUrl),
-        ready: mercadoPagoMissing.length === 0,
+        ready: false,
         missing: mercadoPagoMissing,
         webhook_url: publicApiUrl ? `${publicApiUrl}/api/webhooks/payments/mercado-pago` : null,
       },
     },
   }
+}
+
+export async function getTenantBillingProviderStatus(tenantId: string) {
+  const base = getBillingProviderStatus()
+  const account = await getTenantPaymentAccount(tenantId, 'ASAAS')
+  const connected = Boolean(account?.wallet_id && account.provider_account_id && account.status === 'VINCULADA')
+  const asaasMissing = [
+    ...base.providers.ASAAS.missing,
+    !connected ? 'ASAAS_TENANT_ACCOUNT' : null,
+  ].filter((value): value is string => Boolean(value))
+
+  return {
+    ...base,
+    tenant_account: account ? toPublicPaymentAccount(account) : null,
+    providers: {
+      ...base.providers,
+      ASAAS: {
+        ...base.providers.ASAAS,
+        charges_enabled: base.providers.ASAAS.charges_enabled && connected,
+        ready: asaasMissing.length === 0,
+        missing: asaasMissing,
+      },
+    },
+  }
+}
+
+export async function connectTenantAsaasAccount(
+  tenantId: string,
+  createdBy: string,
+  input: AsaasSubaccountInput,
+) {
+  if (!env.ASAAS_API_KEY) {
+    throw new Error('A conta raiz do Asaas ainda nao esta configurada no servidor.')
+  }
+
+  const cpfCnpj = digits(input.cpfCnpj)
+  const mobilePhone = digits(input.mobilePhone)
+  const postalCode = digits(input.postalCode)
+  const now = new Date().toISOString()
+  const { data: current, error: currentError } = await adminSupabase
+    .from('payment_accounts')
+    .select('*')
+    .eq('tenant_id', tenantId)
+    .eq('provider', 'ASAAS')
+    .maybeSingle()
+  if (currentError && isMissingTableError(currentError.message, 'payment_accounts')) {
+    throw new Error('A estrutura de contas de pagamento ainda nao foi aplicada no Supabase. Rode a migracao 016.')
+  }
+  if (currentError) throw currentError
+  if (current?.provider_account_id && current?.wallet_id) {
+    return refreshTenantAsaasAccount(tenantId)
+  }
+  if (current?.status === 'PENDENTE') {
+    const pendingAgeMs = Date.now() - new Date(current.updated_at).getTime()
+    if (Number.isFinite(pendingAgeMs) && pendingAgeMs < 10 * 60 * 1000) {
+      throw new Error('A conexao desta empresa ja esta em andamento. Aguarde alguns instantes e atualize o status.')
+    }
+  }
+
+  const pendingPayload = {
+    tenant_id: tenantId,
+    provider: 'ASAAS',
+    status: 'PENDENTE',
+    account_name: input.name,
+    account_email: input.email,
+    document_last4: cpfCnpj.slice(-4),
+    split_percentage: 100,
+    last_error: null,
+    created_by: createdBy,
+    updated_at: now,
+  }
+  if (current) {
+    const { data: claimed, error: claimError } = await adminSupabase
+      .from('payment_accounts')
+      .update(pendingPayload)
+      .eq('id', current.id)
+      .eq('updated_at', current.updated_at)
+      .select('id')
+      .maybeSingle()
+    if (claimError) throw claimError
+    if (!claimed) throw new Error('Outra tentativa de conexao foi iniciada para esta empresa. Atualize o status.')
+  } else {
+    const { error: insertError } = await adminSupabase
+      .from('payment_accounts')
+      .insert(pendingPayload)
+    if (insertError?.code === '23505') {
+      throw new Error('Outra tentativa de conexao foi iniciada para esta empresa. Atualize o status.')
+    }
+    if (insertError) throw insertError
+  }
+
+  try {
+    const headers = asaasHeaders()
+    const searchResponse = await fetch(
+      `${env.ASAAS_API_URL}/accounts?cpfCnpj=${encodeURIComponent(cpfCnpj)}&limit=1`,
+      { headers },
+    )
+    const searchPayload = await parseProviderResponse(searchResponse, 'consultar a conta da empresa no Asaas')
+    let account = searchPayload.data?.[0]
+
+    if (!account?.id || !account?.walletId) {
+      const response = await fetch(`${env.ASAAS_API_URL}/accounts`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          name: input.name,
+          email: input.email,
+          loginEmail: input.loginEmail || input.email,
+          cpfCnpj,
+          birthDate: cpfCnpj.length === 11 ? input.birthDate : undefined,
+          companyType: cpfCnpj.length === 14 ? input.companyType : undefined,
+          mobilePhone,
+          site: 'https://agendasport.com.br',
+          incomeValue: input.incomeValue,
+          address: input.address,
+          addressNumber: input.addressNumber,
+          complement: input.complement || undefined,
+          province: input.province,
+          postalCode,
+        }),
+      })
+      account = await parseProviderResponse(response, 'criar a conta da empresa no Asaas')
+    }
+
+    if (!account?.id || !account?.walletId) {
+      throw new Error('O Asaas nao retornou os identificadores da conta recebedora.')
+    }
+
+    const { error: updateError } = await adminSupabase
+      .from('payment_accounts')
+      .update({
+        provider_account_id: String(account.id),
+        wallet_id: String(account.walletId),
+        status: 'VINCULADA',
+        last_error: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('tenant_id', tenantId)
+      .eq('provider', 'ASAAS')
+    if (updateError) throw updateError
+
+    return getTenantBillingProviderStatus(tenantId)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Falha desconhecida ao conectar a conta Asaas.'
+    await adminSupabase
+      .from('payment_accounts')
+      .update({
+        status: 'ERRO',
+        last_error: message.slice(0, 500),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('tenant_id', tenantId)
+      .eq('provider', 'ASAAS')
+    throw error
+  }
+}
+
+export async function refreshTenantAsaasAccount(tenantId: string) {
+  const account = await getTenantPaymentAccount(tenantId, 'ASAAS')
+  if (!account?.provider_account_id) {
+    throw new Error('Esta empresa ainda nao possui uma conta Asaas vinculada.')
+  }
+  if (!env.ASAAS_API_KEY) throw new Error('A conta raiz do Asaas nao esta configurada no servidor.')
+
+  try {
+    const response = await fetch(
+      `${env.ASAAS_API_URL}/accounts/${encodeURIComponent(account.provider_account_id)}`,
+      { headers: asaasHeaders() },
+    )
+    const providerAccount = await parseProviderResponse(response, 'atualizar a conta da empresa no Asaas')
+    const { error } = await adminSupabase
+      .from('payment_accounts')
+      .update({
+        wallet_id: providerAccount.walletId ? String(providerAccount.walletId) : account.wallet_id,
+        account_name: providerAccount.name ?? account.account_name,
+        account_email: providerAccount.email ?? account.account_email,
+        status: providerAccount.walletId || account.wallet_id ? 'VINCULADA' : 'PENDENTE',
+        last_error: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', account.id)
+    if (error) throw error
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Falha ao atualizar a conta Asaas.'
+    await adminSupabase
+      .from('payment_accounts')
+      .update({ status: 'ERRO', last_error: message.slice(0, 500), updated_at: new Date().toISOString() })
+      .eq('id', account.id)
+    throw error
+  }
+
+  return getTenantBillingProviderStatus(tenantId)
 }
 
 export async function runMonthlyBillingForTenant(tenantId: string, options: { force?: boolean } = {}) {
@@ -309,7 +564,8 @@ export async function ensureCasualChargeForConfirmation(
   const amount = Number(row.match?.pickup?.casual_price ?? 0)
   if (!amount) return 'SKIPPED_ZERO_AMOUNT'
   const provider = normalizeProvider(settings.default_provider)
-  if (provider === 'MANUAL_PIX' || !getBillingProviderStatus().providers[provider].ready) {
+  const providerStatus = await getTenantBillingProviderStatus(tenantId)
+  if (provider === 'MANUAL_PIX' || !providerStatus.providers[provider].ready) {
     return 'SKIPPED_PROVIDER_NOT_CONFIGURED'
   }
 
@@ -543,6 +799,55 @@ async function sendPaymentReminders(tenantId: string, today: string) {
   }
 }
 
+async function getTenantPaymentAccount(
+  tenantId: string,
+  provider: 'ASAAS',
+): Promise<TenantPaymentAccountRow | null> {
+  const { data, error } = await adminSupabase
+    .from('payment_accounts')
+    .select('*')
+    .eq('tenant_id', tenantId)
+    .eq('provider', provider)
+    .maybeSingle()
+  if (error && isMissingTableError(error.message, 'payment_accounts')) return null
+  if (error) throw error
+  return data as TenantPaymentAccountRow | null
+}
+
+async function requireTenantAsaasAccount(tenantId: string) {
+  const account = await getTenantPaymentAccount(tenantId, 'ASAAS')
+  if (!account?.provider_account_id || !account.wallet_id || account.status !== 'VINCULADA') {
+    throw new Error('Conecte a conta Asaas desta empresa antes de gerar cobrancas.')
+  }
+  return account
+}
+
+function toPublicPaymentAccount(account: TenantPaymentAccountRow) {
+  return {
+    provider: account.provider,
+    status: account.status,
+    connected: Boolean(account.provider_account_id && account.wallet_id && account.status === 'VINCULADA'),
+    account_name: account.account_name,
+    account_email: account.account_email,
+    document_last4: account.document_last4,
+    wallet_suffix: account.wallet_id ? account.wallet_id.slice(-6) : null,
+    split_percentage: Number(account.split_percentage),
+    last_error: account.last_error,
+    created_at: account.created_at,
+    updated_at: account.updated_at,
+  }
+}
+
+function asaasHeaders() {
+  if (!env.ASAAS_API_KEY) throw new Error('ASAAS_API_KEY nao esta configurada no servidor.')
+  return {
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+    access_token: env.ASAAS_API_KEY,
+    'User-Agent': 'AgendaSport/1.0',
+  }
+}
+
 async function createAsaasCharge(input: {
   name: string
   email: string | null
@@ -551,13 +856,11 @@ async function createAsaasCharge(input: {
   dueDate: string
   description: string
   externalReference: string
+  walletId: string
+  splitPercentage: number
 }) {
   if (!env.ASAAS_API_KEY) throw new Error('Asaas selecionado, mas ASAAS_API_KEY nao esta configurada no servidor.')
-  const headers = {
-    'Content-Type': 'application/json',
-    access_token: env.ASAAS_API_KEY,
-    'User-Agent': 'AgendaSport/1.0',
-  }
+  const headers = asaasHeaders()
   const phone = digits(input.phone)
   const existingPaymentResponse = await fetch(
     `${env.ASAAS_API_URL}/payments?externalReference=${encodeURIComponent(input.externalReference)}&limit=1`,
@@ -571,6 +874,8 @@ async function createAsaasCharge(input: {
       providerPaymentId: String(existingPayment.id),
       checkoutUrl: existingPayment.invoiceUrl ?? null,
       pixCode: existingPix,
+      recipientWalletId: input.walletId,
+      splitPercentage: input.splitPercentage,
     }
   }
 
@@ -581,15 +886,6 @@ async function createAsaasCharge(input: {
   )
   const customerSearchPayload = await parseProviderResponse(customerSearch, 'consultar cliente no Asaas')
   let customerId: string | null = customerSearchPayload.data?.[0]?.id ?? null
-  if (phone) {
-    const search = customerId
-      ? null
-      : await fetch(`${env.ASAAS_API_URL}/customers?mobilePhone=${encodeURIComponent(phone)}&limit=1`, { headers })
-    if (search) {
-      const searchPayload = await parseProviderResponse(search, 'consultar cliente no Asaas')
-      customerId = searchPayload.data?.[0]?.id ?? null
-    }
-  }
   if (!customerId) {
     const customerResponse = await fetch(`${env.ASAAS_API_URL}/customers`, {
       method: 'POST',
@@ -604,17 +900,19 @@ async function createAsaasCharge(input: {
     const customer = await parseProviderResponse(customerResponse, 'criar cliente no Asaas')
     customerId = customer.id
   }
+  if (!customerId) throw new Error('O Asaas nao retornou o identificador do pagador.')
   const paymentResponse = await fetch(`${env.ASAAS_API_URL}/payments`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({
-      customer: customerId,
-      billingType: 'PIX',
-      value: input.amount,
+    body: JSON.stringify(buildAsaasPaymentPayload({
+      customerId,
+      amount: input.amount,
       dueDate: input.dueDate,
       description: input.description,
       externalReference: input.externalReference,
-    }),
+      walletId: input.walletId,
+      splitPercentage: input.splitPercentage,
+    })),
   })
   const payment = await parseProviderResponse(paymentResponse, 'criar cobranca no Asaas')
   const pixCode = await getAsaasPixCode(String(payment.id), headers)
@@ -622,44 +920,8 @@ async function createAsaasCharge(input: {
     providerPaymentId: String(payment.id),
     checkoutUrl: payment.invoiceUrl ?? null,
     pixCode,
-  }
-}
-
-async function createMercadoPagoCharge(input: {
-  email: string
-  amount: number
-  dueDate: string
-  description: string
-  externalReference: string
-}) {
-  if (!env.MERCADO_PAGO_ACCESS_TOKEN) {
-    throw new Error('Mercado Pago selecionado, mas MERCADO_PAGO_ACCESS_TOKEN nao esta configurado no servidor.')
-  }
-  const response = await fetch(`${env.MERCADO_PAGO_API_URL}/v1/payments`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${env.MERCADO_PAGO_ACCESS_TOKEN}`,
-      'Content-Type': 'application/json',
-      'X-Idempotency-Key': createHash('sha256').update(input.externalReference).digest('hex'),
-    },
-    body: JSON.stringify({
-      transaction_amount: input.amount,
-      description: input.description,
-      payment_method_id: 'pix',
-      external_reference: input.externalReference,
-      date_of_expiration: `${input.dueDate}T23:59:59.000-03:00`,
-      payer: { email: input.email },
-      notification_url: env.PUBLIC_API_URL
-        ? `${env.PUBLIC_API_URL.replace(/\/$/, '')}/api/webhooks/payments/mercado-pago`
-        : undefined,
-    }),
-  })
-  const payment = await parseProviderResponse(response, 'criar cobranca no Mercado Pago')
-  const transactionData = payment.point_of_interaction?.transaction_data
-  return {
-    providerPaymentId: String(payment.id),
-    checkoutUrl: transactionData?.ticket_url ?? null,
-    pixCode: transactionData?.qr_code ?? null,
+    recipientWalletId: input.walletId,
+    splitPercentage: input.splitPercentage,
   }
 }
 

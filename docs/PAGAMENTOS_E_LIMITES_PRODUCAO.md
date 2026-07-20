@@ -2,14 +2,17 @@
 
 ## Fluxo de cobranca
 
-1. O administrador escolhe Asaas ou Mercado Pago em Configuracoes.
-2. O participante avulso responde SIM pelo WhatsApp ou e confirmado pelo admin.
-3. O banco reserva uma vaga da funcao do participante.
-4. Se houver vaga, o sistema cria somente uma cobranca para aquele participante
+1. O administrador total conecta a conta Asaas da propria empresa.
+2. O sistema grava o `walletId` da empresa e habilita o Asaas somente para
+   aquele tenant.
+3. O participante avulso responde SIM pelo WhatsApp ou e confirmado pelo admin.
+4. O banco reserva uma vaga da funcao do participante.
+5. Se houver vaga, o sistema cria somente uma cobranca para aquele participante
    e evento.
-5. O link/PIX e enviado no WhatsApp individual.
-6. O webhook do gateway marca a cobranca como paga, atrasada ou cancelada.
-7. O financeiro permite reenviar a cobranca, copiar o PIX e dar baixa manual.
+6. A cobranca inclui o split para a carteira da empresa e o link/PIX e enviado
+   no WhatsApp individual.
+7. O webhook do gateway marca a cobranca como paga, atrasada ou cancelada.
+8. O financeiro permite reenviar a cobranca, copiar o PIX e dar baixa manual.
 
 Participantes na fila nao recebem cobranca. Quando uma vaga e liberada, o
 primeiro participante elegivel da mesma funcao e promovido e recebe sua
@@ -40,6 +43,7 @@ Execute no SQL Editor:
 
 ```text
 supabase/migrations/015_capacity_and_billing_delivery.sql
+supabase/migrations/016_tenant_payment_accounts.sql
 ```
 
 Depois aguarde a atualizacao do cache do esquema e recarregue o sistema.
@@ -63,24 +67,22 @@ https://agendasport.com.br/api/webhooks/payments/asaas
 
 Use no campo de token o mesmo `ASAAS_WEBHOOK_TOKEN`.
 
-## Ativacao do Mercado Pago
+A conta raiz do Asaas deve ser de pessoa juridica para criar subcontas. Depois
+da ativacao do servidor, cada empresa abre `Configuracoes > Regras financeiras`
+e conecta a propria conta recebedora. O sistema procura uma subconta existente
+pelo CPF/CNPJ antes de criar outra.
 
-Preencha na Hostinger:
+As cobrancas sao emitidas pela conta raiz e levam um split de 100% do valor
+liquido para o `walletId` da empresa. A tarifa do Asaas e descontada antes do
+split. A Agenda Sport nao armazena a chave privada retornada na criacao da
+subconta porque as operacoes desse fluxo usam a conta raiz e o identificador da
+carteira.
 
-```env
-PUBLIC_API_URL=https://agendasport.com.br
-MERCADO_PAGO_ACCESS_TOKEN=credencial_de_producao
-MERCADO_PAGO_API_URL=https://api.mercadopago.com
-MERCADO_PAGO_WEBHOOK_SECRET=assinatura_secreta_do_webhook
-```
+## Mercado Pago
 
-Cadastre na aplicacao do Mercado Pago:
-
-```text
-https://agendasport.com.br/api/webhooks/payments/mercado-pago
-```
-
-Assine o evento de pagamentos.
+O Mercado Pago permanece desabilitado no modo multiempresa ate a implantacao
+do OAuth individual por empresa. Uma unica credencial global nao deve ser usada
+para receber valores de clientes diferentes.
 
 ## WhatsApp de cobranca
 

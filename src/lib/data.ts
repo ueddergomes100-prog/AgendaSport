@@ -1,6 +1,7 @@
 import { supabase } from './supabase'
 import { toDbPosition } from './positions'
 import type {
+  AsaasAccountInput,
   Attendance,
   BillingProviderStatus,
   BillingSettings,
@@ -429,6 +430,36 @@ export async function getBillingProviderStatus(): Promise<BillingProviderStatus>
   })
   const payload = await response.json().catch(() => ({}))
   if (!response.ok) throw new Error(payload.error ?? 'Nao foi possivel consultar os gateways.')
+  return payload as BillingProviderStatus
+}
+
+export async function connectAsaasAccount(input: AsaasAccountInput): Promise<BillingProviderStatus> {
+  const { data: session } = await supabase.auth.getSession()
+  const token = session.session?.access_token
+  if (!token) throw new Error('Sessao expirada. Faca login novamente.')
+  const response = await fetch(apiUrl('/api/billing/accounts/asaas'), {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(input),
+  })
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(payload.error ?? 'Nao foi possivel conectar a conta Asaas.')
+  return payload as BillingProviderStatus
+}
+
+export async function refreshAsaasAccount(): Promise<BillingProviderStatus> {
+  const { data: session } = await supabase.auth.getSession()
+  const token = session.session?.access_token
+  if (!token) throw new Error('Sessao expirada. Faca login novamente.')
+  const response = await fetch(apiUrl('/api/billing/accounts/asaas/refresh'), {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(payload.error ?? 'Nao foi possivel atualizar a conta Asaas.')
   return payload as BillingProviderStatus
 }
 

@@ -210,14 +210,47 @@ export type Payment = {
   status: PaymentStatus
   checkout_url: string | null
   pix_code: string | null
+  recipient_wallet_id?: string | null
+  split_percentage?: number | null
   delivery_status?: string
   created_at: string
   player?: Pick<Player, 'id' | 'name' | 'whatsapp'>
 }
 
+export type TenantPaymentAccount = {
+  provider: 'ASAAS'
+  status: 'PENDENTE' | 'VINCULADA' | 'BLOQUEADA' | 'ERRO'
+  connected: boolean
+  account_name: string | null
+  account_email: string | null
+  document_last4: string | null
+  wallet_suffix: string | null
+  split_percentage: number
+  last_error: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export type AsaasAccountInput = {
+  name: string
+  email: string
+  loginEmail?: string
+  cpfCnpj: string
+  birthDate?: string
+  companyType?: 'MEI' | 'LIMITED' | 'INDIVIDUAL' | 'ASSOCIATION'
+  mobilePhone: string
+  incomeValue: number
+  address: string
+  addressNumber: string
+  complement?: string
+  province: string
+  postalCode: string
+}
+
 export type BillingProviderStatus = {
   public_api_url: string | null
   whatsapp_billing_template_configured: boolean
+  tenant_account: TenantPaymentAccount | null
   providers: Record<'MANUAL_PIX' | 'ASAAS' | 'MERCADO_PAGO', {
     charges_enabled: boolean
     webhook_ready: boolean
