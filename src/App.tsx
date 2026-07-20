@@ -1,7 +1,9 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import type { Session } from '@supabase/supabase-js'
 import { AppShell } from './components/layout/AppShell'
+import { Button } from './components/ui/button'
 import { ErrorBoundary } from './components/ui/error-boundary'
 import { LoadingState } from './components/ui/sport'
 import { getProfile } from './lib/data'
@@ -25,33 +27,80 @@ import { SettingsPage } from './pages/SettingsPage'
 import { StatsPage } from './pages/StatsPage'
 
 function ProtectedApp() {
-  const profile = useQuery({ queryKey: ['profile'], queryFn: getProfile })
-  const [ready, setReady] = useState(false)
-  const [hasSession, setHasSession] = useState(false)
+  const queryClient = useQueryClient()
+  const [session, setSession] = useState<Session | null | undefined>(undefined)
+  const profile = useQuery({
+    queryKey: ['profile'],
+    queryFn: getProfile,
+    enabled: Boolean(session),
+    retry: 2,
+  })
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem('agendasport-theme') === 'dark')
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setHasSession(Boolean(data.session))
-      setReady(true)
+    let active = true
+
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (!active) return
+      setSession(error ? null : data.session)
     })
-    const { data } = supabase.auth.onAuthStateChange((_event, session) => setHasSession(Boolean(session)))
-    return () => data.subscription.unsubscribe()
-  }, [])
+    const { data } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      if (!active) return
+      setSession(nextSession)
+
+      if (!nextSession || event === 'SIGNED_OUT') {
+        queryClient.removeQueries({ queryKey: ['profile'] })
+      } else if (event === 'SIGNED_IN' || event === 'USER_UPDATED') {
+        queryClient.invalidateQueries({ queryKey: ['profile'] })
+      }
+    })
+
+    return () => {
+      active = false
+      data.subscription.unsubscribe()
+    }
+  }, [queryClient])
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', darkMode)
     localStorage.setItem('agendasport-theme', darkMode ? 'dark' : 'light')
   }, [darkMode])
 
-  if (!ready || profile.isLoading) return <LoadingState />
-  if (!hasSession) return <Navigate to="/login" replace />
+  if (session === undefined) return <LoadingState label="Confirmando sua sessao..." />
+  if (!session) return <Navigate to="/login" replace />
+  if (profile.isLoading) return <LoadingState label="Carregando seu perfil..." />
   if (profile.isError) {
-    return <LoadingState label="Nao foi possivel carregar seu perfil. Recarregue a pagina." />
+    return (
+      <AccessError
+        message="Sua sessao foi confirmada, mas nao foi possivel carregar o perfil."
+        onRetry={() => profile.refetch()}
+      />
+    )
   }
-  if (!profile.data) return <Navigate to="/login" replace />
+  if (!profile.data) {
+    return (
+      <AccessError
+        message="Seu acesso foi autenticado, mas o perfil da empresa nao foi encontrado."
+        onRetry={() => profile.refetch()}
+      />
+    )
+  }
 
   return <AppShell profile={profile.data} darkMode={darkMode} setDarkMode={setDarkMode} />
+}
+
+function AccessError({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <main className="grid min-h-screen place-items-center bg-slate-50 p-4">
+      <section className="w-full max-w-md rounded-lg border border-slate-200 bg-white p-6 text-center shadow-lg">
+        <h1 className="text-xl font-black text-slate-950">Nao foi possivel abrir o sistema</h1>
+        <p className="mt-2 text-sm font-medium text-slate-600">{message}</p>
+        <div className="mt-5 flex justify-center">
+          <Button type="button" onClick={onRetry}>Tentar novamente</Button>
+        </div>
+      </section>
+    </main>
+  )
 }
 
 function TenantOnly({ children, permission, anyPermission }: { children: ReactNode; permission?: PermissionKey; anyPermission?: PermissionKey[] }) {

@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion'
-import { CalendarCheck, Eye, Lock, Mail, UserPlus } from 'lucide-react'
+import { CalendarCheck, Eye, EyeOff, Lock, Mail, UserPlus } from 'lucide-react'
 import type { FormEvent, ReactNode } from 'react'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Button } from '../ui/button'
 
@@ -16,8 +17,9 @@ type LoginCardProps = {
   password: string
   setPassword: (value: string) => void
   message: string
+  messageType: 'success' | 'error'
   loading: boolean
-  submit: (event: FormEvent) => void
+  submit: (event: FormEvent<HTMLFormElement>) => void
 }
 
 const modeCopy: Record<LoginMode, { title: string; subtitle: string; action: string }> = {
@@ -48,6 +50,7 @@ export function LoginCard({
   password,
   setPassword,
   message,
+  messageType,
   loading,
   submit,
 }: LoginCardProps) {
@@ -84,6 +87,7 @@ export function LoginCard({
         {mode === 'signup' && (
           <LoginInput
             label="Nome completo"
+            name="fullName"
             autoComplete="name"
             value={fullName}
             onChange={setFullName}
@@ -94,6 +98,7 @@ export function LoginCard({
 
         <LoginInput
           label="Email"
+          name="email"
           type="email"
           autoComplete="email"
           value={email}
@@ -105,20 +110,31 @@ export function LoginCard({
         {mode !== 'recover' && (
           <LoginInput
             label="Senha"
+            name="password"
             type="password"
             autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
             value={password}
             onChange={setPassword}
             icon={<Lock size={18} />}
-            trailingIcon={<Eye size={17} />}
             minLength={6}
             required
           />
         )}
 
-        {message && <p className="rounded-lg border border-green-100 bg-green-50 px-3 py-2 text-sm font-semibold text-green-900">{message}</p>}
+        {message && (
+          <p
+            aria-live="polite"
+            className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
+              messageType === 'error'
+                ? 'border-red-200 bg-red-50 text-red-800'
+                : 'border-green-100 bg-green-50 text-green-900'
+            }`}
+          >
+            {message}
+          </p>
+        )}
 
-        <Button className="login-glow-button min-h-12 rounded-lg text-base" disabled={loading}>
+        <Button type="submit" className="login-glow-button min-h-12 rounded-lg text-base" disabled={loading}>
           {loading ? 'Processando...' : copy.action}
         </Button>
       </form>
@@ -148,25 +164,28 @@ function ModeButton({ active, children, onClick }: { active: boolean; children: 
 
 function LoginInput({
   label,
+  name,
   value,
   onChange,
   icon,
-  trailingIcon,
   type = 'text',
   required,
   minLength,
   autoComplete,
 }: {
   label: string
+  name: string
   value: string
   onChange: (value: string) => void
   icon: ReactNode
-  trailingIcon?: ReactNode
   type?: string
   required?: boolean
   minLength?: number
   autoComplete?: string
 }) {
+  const [showPassword, setShowPassword] = useState(false)
+  const isPassword = type === 'password'
+
   return (
     <label className="grid gap-2 text-sm font-black text-slate-700">
       {label}
@@ -174,14 +193,25 @@ function LoginInput({
         <span className="text-slate-400">{icon}</span>
         <input
           className="h-12 min-w-0 flex-1 bg-transparent text-sm font-semibold text-slate-950 outline-none placeholder:text-slate-400"
-          type={type}
+          name={name}
+          type={isPassword && showPassword ? 'text' : type}
           required={required}
           minLength={minLength}
           autoComplete={autoComplete}
           value={value}
           onChange={(event) => onChange(event.target.value)}
         />
-        {trailingIcon && <span className="text-slate-300" aria-hidden="true">{trailingIcon}</span>}
+        {isPassword && (
+          <button
+            type="button"
+            className="grid size-9 place-items-center text-slate-400 transition hover:text-slate-700"
+            onClick={() => setShowPassword((current) => !current)}
+            aria-label={showPassword ? 'Ocultar senha' : 'Mostrar senha'}
+            title={showPassword ? 'Ocultar senha' : 'Mostrar senha'}
+          >
+            {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+          </button>
+        )}
       </span>
     </label>
   )

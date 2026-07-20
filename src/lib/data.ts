@@ -29,9 +29,10 @@ function apiUrl(path: string) {
 }
 
 export async function getProfile(): Promise<Profile | null> {
-  const { data: auth } = await supabase.auth.getUser()
-  if (!auth.user) return null
-  const { data, error } = await supabase.from('profiles').select('*').eq('id', auth.user.id).single()
+  const { data: auth, error: sessionError } = await supabase.auth.getSession()
+  if (sessionError) throw sessionError
+  if (!auth.session?.user) return null
+  const { data, error } = await supabase.from('profiles').select('*').eq('id', auth.session.user.id).maybeSingle()
   if (error) throw error
   return data
 }
