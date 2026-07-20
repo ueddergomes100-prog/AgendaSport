@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { z } from 'zod'
-import { createPaymentCharge, type BillingProvider } from './billing.js'
+import { ensureCasualChargeForConfirmation } from './billing.js'
 import { env } from './env.js'
 import {
   getWaitlistPlayerIds,
@@ -323,9 +323,19 @@ async function processAttendanceReply(fromPhone: string, replyStatus: Attendance
     console.warn('[whatsapp:webhook] failed to update configured WhatsApp group', error)
   })
 
-  const chargeStatus = finalStatus === 'CONFIRMADO'
-    ? await ensureCasualChargeForConfirmation(attendance)
-    : 'SKIPPED'
+  let chargeStatus = 'SKIPPED'
+  if (finalStatus === 'CONFIRMADO') {
+    try {
+      chargeStatus = await ensureCasualChargeForConfirmation(
+        attendance.tenant_id,
+        attendance.match_id,
+        attendance.player_id,
+      )
+    } catch (error) {
+      chargeStatus = `FAILED: ${error instanceof Error ? error.message : 'Falha ao gerar cobranca'}`
+      console.error('[billing] casual confirmation charge failed', error)
+    }
+  }
 
   return {
     tenantId: attendance.tenant_id,
@@ -337,58 +347,6 @@ async function processAttendanceReply(fromPhone: string, replyStatus: Attendance
     replyStatus: finalStatus,
     chargeStatus,
   }
-}
-
-async function ensureCasualChargeForConfirmation(attendance: AttendanceCandidate) {
-  const { data: settings, error: settingsError } = await adminSupabase
-    .from('billing_settings')
-    .select('auto_charge_casual_players, default_provider')
-    .eq('tenant_id', attendance.tenant_id)
-    .maybeSingle()
-
-  if (settingsError && isMissingBillingSettingsError(settingsError.message)) return 'SKIPPED_SETTINGS_TABLE_MISSING'
-  if (settingsError) throw settingsError
-  if (!settings?.auto_charge_casual_players) return 'SKIPPED_DISABLED'
-
-  const { data: details, error: detailsError } = await adminSupabase
-    .from('attendance')
-    .select('player:players(id, name, type, whatsapp), match:matches(id, scheduled_at, pickup:pickups(name, casual_price))')
-    .eq('id', attendance.id)
-    .single()
-  if (detailsError) throw detailsError
-
-  const row = details as unknown as {
-    player: { id: string; name: string; type: string; whatsapp: string | null } | null
-    match: { id: string; scheduled_at: string; pickup: { name: string; casual_price: number } | null } | null
-  }
-
-  if (row.player?.type !== 'AVULSO') return 'SKIPPED_NOT_CASUAL'
-  const amount = Number(row.match?.pickup?.casual_price ?? 0)
-  if (!amount) return 'SKIPPED_ZERO_AMOUNT'
-
-  const { data: existing, error: existingError } = await adminSupabase
-    .from('payments')
-    .select('id')
-    .eq('tenant_id', attendance.tenant_id)
-    .eq('match_id', attendance.match_id)
-    .eq('player_id', attendance.player_id)
-    .neq('status', 'CANCELADO')
-    .limit(1)
-  if (existingError) throw existingError
-  if (existing?.length) return 'SKIPPED_ALREADY_EXISTS'
-
-  await createPaymentCharge({
-    tenantId: attendance.tenant_id,
-    matchId: attendance.match_id,
-    playerId: attendance.player_id,
-    provider: normalizeBillingProvider(settings.default_provider),
-    amount,
-    dueDate: new Date().toISOString().slice(0, 10),
-    description: `Pagamento - ${row.match?.pickup?.name ?? 'Evento esportivo'}`,
-    sendMessage: true,
-  })
-
-  return 'CREATED'
 }
 
 async function sendAttendanceAcknowledgement({
@@ -500,15 +458,6 @@ function phoneMatchScore(playerPhone: string | null, inboundDigits: string) {
   }
 
   return 0
-}
-
-function isMissingBillingSettingsError(message: string) {
-  return message.includes('billing_settings') && (message.includes('schema cache') || message.includes('does not exist') || message.includes('relation'))
-}
-
-function normalizeBillingProvider(provider: string | null): BillingProvider {
-  if (provider === 'ASAAS' || provider === 'MERCADO_PAGO') return provider
-  return 'MANUAL_PIX'
 }
 
 function phoneVariants(digits: string) {

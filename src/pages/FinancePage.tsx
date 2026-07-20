@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { CheckCircle2, CreditCard, DollarSign, LoaderCircle, Plus, Receipt, Save, Trash2, TrendingDown, TrendingUp, WalletCards } from 'lucide-react'
+import { CheckCircle2, Copy, CreditCard, DollarSign, ExternalLink, LoaderCircle, MessageCircle, Plus, Receipt, Save, Trash2, TrendingDown, TrendingUp, WalletCards } from 'lucide-react'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Button } from '../components/ui/button'
 import { Card, CardTitle } from '../components/ui/card'
@@ -10,12 +10,14 @@ import {
   createFinanceTransaction,
   createPayment,
   deleteFinanceTransaction,
+  getBillingProviderStatus,
   getBillingSettings,
   getDashboardStats,
   getFinanceTransactions,
   getPayments,
   getPlayers,
   runMonthlyBilling,
+  sendPaymentMessage,
   updatePayment,
 } from '../lib/data'
 import type { FinanceTransaction, Payment, PaymentStatus } from '../lib/types'
@@ -34,9 +36,17 @@ export function FinancePage() {
   const transactions = useQuery({ queryKey: ['finance-transactions'], queryFn: getFinanceTransactions })
   const players = useQuery({ queryKey: ['players'], queryFn: getPlayers })
   const billing = useQuery({ queryKey: ['billing-settings'], queryFn: getBillingSettings })
+  const gatewayStatus = useQuery({ queryKey: ['billing-provider-status'], queryFn: getBillingProviderStatus })
   const [modalMode, setModalMode] = useState<ModalMode>(null)
   const [saving, setSaving] = useState(false)
+  const [sendingPaymentId, setSendingPaymentId] = useState<string | null>(null)
   const [feedback, setFeedback] = useState('')
+  const savedPaymentProvider = billing.data?.default_provider ?? 'MANUAL_PIX'
+  const supportedPaymentProvider = savedPaymentProvider === 'ASAAS' || savedPaymentProvider === 'MERCADO_PAGO'
+  const defaultPaymentProvider = savedPaymentProvider === 'MANUAL_PIX'
+    || (supportedPaymentProvider && gatewayStatus.data?.providers[savedPaymentProvider]?.ready)
+    ? savedPaymentProvider
+    : 'MANUAL_PIX'
 
   const paidPayments = (payments.data ?? []).filter((payment) => payment.status === 'PAGO')
   const pendingPayments = (payments.data ?? []).filter((payment) => ['PENDENTE', 'ATRASADO'].includes(payment.status))
@@ -87,7 +97,7 @@ export function FinancePage() {
     try {
       const form = new FormData(event.currentTarget)
       const status = String(form.get('status')) as PaymentStatus
-      await createPayment({
+      const payment = await createPayment({
         player_id: String(form.get('player_id') || '') || null,
         provider: String(form.get('provider') || 'MANUAL_PIX'),
         amount: Number(form.get('amount') || 0),
@@ -97,7 +107,7 @@ export function FinancePage() {
       })
       await refreshFinance()
       setModalMode(null)
-      setFeedback('Cobranca cadastrada com sucesso.')
+      setFeedback(paymentFeedback(payment))
     } catch (error) {
       setFeedback(getErrorMessage(error, 'Nao foi possivel cadastrar a cobranca.'))
     } finally {
@@ -139,6 +149,25 @@ export function FinancePage() {
     } catch (error) {
       setFeedback(getErrorMessage(error, 'Nao foi possivel marcar pagamento como recebido.'))
     }
+  }
+
+  async function resendPayment(payment: Payment) {
+    setSendingPaymentId(payment.id)
+    setFeedback('')
+    try {
+      await sendPaymentMessage(payment.id)
+      setFeedback(`Cobranca enviada para ${payment.player?.name ?? 'o participante'} pelo WhatsApp.`)
+    } catch (error) {
+      setFeedback(getErrorMessage(error, 'Nao foi possivel enviar a cobranca.'))
+    } finally {
+      setSendingPaymentId(null)
+    }
+  }
+
+  async function copyPix(payment: Payment) {
+    if (!payment.pix_code) return
+    await navigator.clipboard.writeText(payment.pix_code)
+    setFeedback('PIX copia e cola copiado.')
   }
 
   async function generateMonthlyBilling() {
@@ -241,10 +270,36 @@ export function FinancePage() {
                 <div key={payment.id} className="rounded-xl border border-border bg-white/70 p-3 dark:bg-slate-950/40">
                   <p className="font-black">{payment.player?.name ?? 'Participante'}</p>
                   <p className="mt-1 text-xs text-muted-foreground">Vence em {formatDate(payment.due_date)} - {money(payment.amount)}</p>
-                  <Button type="button" variant="secondary" className="mt-3 h-9 w-full" onClick={() => markPaymentPaid(payment)}>
-                    <CheckCircle2 size={15} />
-                    Recebido
-                  </Button>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="h-9 px-2"
+                      onClick={() => resendPayment(payment)}
+                      disabled={sendingPaymentId === payment.id}
+                    >
+                      {sendingPaymentId === payment.id ? <LoaderCircle className="animate-spin" size={15} /> : <MessageCircle size={15} />}
+                      WhatsApp
+                    </Button>
+                    <Button type="button" variant="secondary" className="h-9 px-2" onClick={() => markPaymentPaid(payment)}>
+                      <CheckCircle2 size={15} />
+                      Recebido
+                    </Button>
+                    {payment.checkout_url && (
+                      <Button asChild variant="ghost" className="h-9 px-2">
+                        <a href={payment.checkout_url} target="_blank" rel="noreferrer">
+                          <ExternalLink size={15} />
+                          Abrir
+                        </a>
+                      </Button>
+                    )}
+                    {payment.pix_code && (
+                      <Button type="button" variant="ghost" className="h-9 px-2" onClick={() => copyPix(payment)}>
+                        <Copy size={15} />
+                        Copiar PIX
+                      </Button>
+                    )}
+                  </div>
                 </div>
               ))}
               {!pendingPayments.length && <p className="rounded-xl border border-dashed border-border p-5 text-center text-sm text-muted-foreground">Nenhuma cobranca pendente.</p>}
@@ -294,16 +349,20 @@ export function FinancePage() {
           <form className="grid gap-4" onSubmit={submitPayment}>
             <div className="grid gap-3 md:grid-cols-2">
               <Field label="Participante">
-                <Select name="player_id">
-                  <option value="">Sem participante</option>
+                <Select name="player_id" required defaultValue="">
+                  <option value="" disabled>Selecione</option>
                   {(players.data ?? []).map((player) => <option key={player.id} value={player.id}>{player.name}</option>)}
                 </Select>
               </Field>
               <Field label="Tipo/Gateway">
-                <Select name="provider" defaultValue={billing.data?.default_provider ?? 'MANUAL_PIX'}>
+                <Select key={defaultPaymentProvider} name="provider" defaultValue={defaultPaymentProvider}>
                   <option value="MANUAL_PIX">Manual PIX</option>
-                  <option value="ASAAS">Asaas</option>
-                  <option value="MERCADO_PAGO">Mercado Pago</option>
+                  <option value="ASAAS" disabled={gatewayStatus.data?.providers.ASAAS.ready === false}>
+                    Asaas{gatewayStatus.data?.providers.ASAAS.ready === false ? ' - nao configurado' : ''}
+                  </option>
+                  <option value="MERCADO_PAGO" disabled={gatewayStatus.data?.providers.MERCADO_PAGO.ready === false}>
+                    Mercado Pago{gatewayStatus.data?.providers.MERCADO_PAGO.ready === false ? ' - nao configurado' : ''}
+                  </option>
                 </Select>
               </Field>
               <Field label="Valor"><Input name="amount" required type="number" min={0.01} step="0.01" /></Field>
@@ -332,6 +391,15 @@ export function FinancePage() {
       )}
     </AnimatedPage>
   )
+}
+
+function paymentFeedback(payment: Payment) {
+  if (payment.delivery_status === 'SENT') return 'Cobranca gerada e enviada para o participante pelo WhatsApp.'
+  if (payment.delivery_status === 'FAILED') return 'Cobranca gerada, mas o WhatsApp nao conseguiu entregar. Use o botao WhatsApp para reenviar.'
+  if (payment.delivery_status === 'QUEUED') return 'Cobranca gerada e enfileirada. Ative o provedor do WhatsApp para concluir o envio.'
+  if (payment.delivery_status === 'SKIPPED_NO_WHATSAPP') return 'Cobranca gerada, mas o participante nao possui WhatsApp cadastrado.'
+  if (payment.delivery_status === 'SKIPPED_ALREADY_EXISTS') return 'Essa cobranca ja existia e nao foi enviada novamente.'
+  return 'Cobranca cadastrada com sucesso.'
 }
 
 function TransactionForm({ saving, onSubmit }: { saving: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => Promise<void> }) {

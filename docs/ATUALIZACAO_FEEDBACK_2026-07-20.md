@@ -48,14 +48,17 @@ clientes e os passos obrigatorios para ativacao em producao.
 
 ## Migração obrigatoria do Supabase
 
-Executar no SQL Editor do Supabase, uma unica vez:
+Executar no SQL Editor do Supabase, nesta ordem e uma unica vez:
 
 `supabase/migrations/014_feedback_hardening.sql`
 
-Essa migracao cria as colunas e tabelas que sustentam permissoes, etapas,
+`supabase/migrations/015_capacity_and_billing_delivery.sql`
+
+A primeira migracao cria as colunas e tabelas que sustentam permissoes, etapas,
 financeiro, configuracao do grupo, resultados por partida e retorno dos
-provedores. Ela tambem substitui a funcao de confirmacao para aplicar limites
-separados de linha e goleiro, fila cronologica e promocao automatica.
+provedores. A segunda blinda a capacidade no banco, inclusive para respostas
+simultaneas: o limite de linha nao e compartilhado com goleiros, e cada
+excedente permanece na fila da propria funcao.
 
 Depois da execucao, aguardar alguns segundos para o PostgREST atualizar o cache
 de esquema e recarregar o sistema.
@@ -89,6 +92,9 @@ Cadastrar no painel do Asaas:
 - Token de autenticacao: o mesmo valor de `ASAAS_WEBHOOK_TOKEN`
 - Eventos: cobranca recebida, confirmada, vencida, estornada e excluida
 
+O valor de `ASAAS_API_KEY` vem da integracao criada no Asaas. Gere
+`ASAAS_WEBHOOK_TOKEN` como um segredo aleatorio com pelo menos 32 caracteres.
+
 ### Mercado Pago
 
 Cadastrar em Suas integracoes, na aplicacao de producao:
@@ -96,6 +102,12 @@ Cadastrar em Suas integracoes, na aplicacao de producao:
 - URL: `https://agendasport.com.br/api/webhooks/payments/mercado-pago`
 - Evento: Pagamentos
 - Assinatura secreta: salvar em `MERCADO_PAGO_WEBHOOK_SECRET`
+
+`MERCADO_PAGO_ACCESS_TOKEN` deve ser a credencial de producao da aplicacao.
+
+Ao abrir qualquer uma das URLs acima no navegador, a API responde com JSON.
+`configuration_required` significa que a rota existe, mas as credenciais ainda
+nao foram preenchidas no ambiente da Hostinger.
 
 O endpoint valida a assinatura HMAC recebida, consulta o pagamento diretamente
 no Mercado Pago e atualiza a cobranca local. Pagamentos aprovados liberam
@@ -126,4 +138,3 @@ Sem template de cobranca aprovado, mensagens fora da janela de atendimento de
 7. Abrir Estatisticas, conferir campeao e gerar o PDF.
 8. Gerar uma cobranca de baixo valor no ambiente de teste do provedor.
 9. Confirmar que o webhook altera a cobranca para Pago e libera o participante.
-

@@ -190,10 +190,13 @@ export function PickupsPage() {
               <Field label="Horario"><Input name="start_time" type="time" required defaultValue={formatTimeInput(editingPickup?.start_time)} /></Field>
               <Field label="Valor avulso"><Input name="casual_price" type="number" min={0} defaultValue={editingPickup?.casual_price ?? 0} /></Field>
               <Field label="Valor mensalista"><Input name="monthly_price" type="number" min={0} defaultValue={editingPickup?.monthly_price ?? 0} /></Field>
-              <Field label="Maximo jogadores de linha"><Input name="max_line_players" type="number" min={0} required defaultValue={editingPickup?.max_line_players ?? editingPickup?.max_players ?? ''} /></Field>
-              <Field label="Maximo goleiros"><Input name="max_goalkeepers" type="number" min={0} required defaultValue={editingPickup?.max_goalkeepers ?? 0} /></Field>
+              <Field label="Limite confirmado - linha"><Input name="max_line_players" type="number" min={0} required defaultValue={editingPickup?.max_line_players ?? editingPickup?.max_players ?? ''} /></Field>
+              <Field label="Limite confirmado - goleiros"><Input name="max_goalkeepers" type="number" min={0} required defaultValue={editingPickup?.max_goalkeepers ?? 0} /></Field>
               <Field label="Horas exclusivas mensalistas"><Input name="mensalista_priority_hours" type="number" min={0} defaultValue={editingPickup?.mensalista_priority_hours ?? 48} /></Field>
             </div>
+            <p className="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-xs font-semibold text-green-900">
+              A lista principal soma os dois limites. Exemplo: 18 de linha + 3 goleiros = 21 confirmados. Depois disso, cada posicao segue para a fila de espera.
+            </p>
 
             {!editingPickup && (
               <Field label="Agenda automatica semanal">
@@ -320,8 +323,8 @@ function PickupCard({ pickup, deleting, onDelete, onEdit }: { pickup: Pickup; de
         </div>
       </div>
       <div className="grid gap-3 p-5 sm:grid-cols-2 xl:grid-cols-4">
-        <Info label="Linha" value={`${pickup.max_line_players ?? pickup.max_players} vagas`} />
-        <Info label="Goleiros" value={`${pickup.max_goalkeepers ?? 0} vagas`} />
+        <Info label="Capacidade total" value={`${pickupCapacity(pickup)} confirmados`} />
+        <Info label="Por posicao" value={`${pickup.max_line_players ?? pickup.max_players} linha + ${pickup.max_goalkeepers ?? 0} goleiros`} />
         <Info label="Avulso" value={money(pickup.casual_price)} />
         <Info label="Mensalista" value={money(pickup.monthly_price)} />
       </div>

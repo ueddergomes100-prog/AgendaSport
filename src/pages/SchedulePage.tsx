@@ -9,6 +9,7 @@ import {
   ExternalLink,
   LoaderCircle,
   MessageCircle,
+  Pencil,
   Save,
   Trophy,
   Trash2,
@@ -72,6 +73,8 @@ export function SchedulePage() {
   const [savingPartialId, setSavingPartialId] = useState('')
   const [deletingMatch, setDeletingMatch] = useState(false)
   const [matchToDelete, setMatchToDelete] = useState<Match | null>(null)
+  const [editingCapacity, setEditingCapacity] = useState(false)
+  const [savingCapacity, setSavingCapacity] = useState(false)
   const [confirmFinish, setConfirmFinish] = useState(false)
   const [feedback, setFeedback] = useState('')
   const [toast, setToast] = useState('')
@@ -92,6 +95,7 @@ export function SchedulePage() {
     [pickups.data],
   )
   const selectedMatchTitle = selectedMatch ? formatMatchTitle(selectedMatch, selectedPickup) : ''
+  const selectedCapacity = selectedMatch ? matchCapacity(selectedMatch, selectedPickup) : { line: 0, goalkeepers: 0, total: 0 }
 
   const attendance = useQuery({
     queryKey: ['attendance', effectiveSelectedMatchId],
@@ -211,6 +215,34 @@ export function SchedulePage() {
       setFeedback(`Resposta de ${item.player?.name ?? 'participante'} atualizada para ${statusLabels[status]}.`)
     } catch (error) {
       setFeedback(getErrorMessage(error, 'Nao foi possivel atualizar a resposta manualmente.'))
+    }
+  }
+
+  async function saveCapacity(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!selectedMatch) return
+    const form = new FormData(event.currentTarget)
+    const maxLinePlayers = Math.max(0, Math.trunc(Number(form.get('max_line_players') || 0)))
+    const maxGoalkeepers = Math.max(0, Math.trunc(Number(form.get('max_goalkeepers') || 0)))
+    if (maxLinePlayers + maxGoalkeepers <= 0) {
+      setFeedback('Informe pelo menos uma vaga confirmada.')
+      return
+    }
+
+    setSavingCapacity(true)
+    setFeedback('')
+    try {
+      await updateMatch(selectedMatch.id, {
+        max_line_players: maxLinePlayers,
+        max_goalkeepers: maxGoalkeepers,
+      })
+      await Promise.all([matches.refetch(), attendance.refetch()])
+      setEditingCapacity(false)
+      setFeedback(`Capacidade atualizada: ${maxLinePlayers} de linha + ${maxGoalkeepers} goleiros = ${maxLinePlayers + maxGoalkeepers} confirmados.`)
+    } catch (error) {
+      setFeedback(getErrorMessage(error, 'Nao foi possivel atualizar a capacidade.'))
+    } finally {
+      setSavingCapacity(false)
     }
   }
 
@@ -442,9 +474,10 @@ export function SchedulePage() {
                 <p className="mt-2 text-xs font-semibold text-muted-foreground">Apenas este evento sera criado agora. Os proximos nascem apos a finalizacao.</p>
               </Field>
               <div className="grid gap-3 sm:grid-cols-2">
-                <Field label="Vagas linha"><Input name="max_line_players" type="number" min={0} defaultValue={18} /></Field>
-                <Field label="Vagas goleiro"><Input name="max_goalkeepers" type="number" min={0} defaultValue={2} /></Field>
+                <Field label="Limite confirmado - linha"><Input name="max_line_players" type="number" min={0} defaultValue={18} /></Field>
+                <Field label="Limite confirmado - goleiros"><Input name="max_goalkeepers" type="number" min={0} defaultValue={2} /></Field>
               </div>
+              <p className="text-xs font-semibold text-muted-foreground">Capacidade total = linha + goleiros. O excedente de cada posicao entra na fila de espera.</p>
               <Field label="Observacoes"><Textarea name="notes" /></Field>
               <Button disabled={savingMatch}>
                 {savingMatch ? <LoaderCircle className="animate-spin" size={16} /> : <CalendarPlus size={16} />}
@@ -503,7 +536,10 @@ export function SchedulePage() {
                       <span className="rounded-md bg-white/15 px-2 py-1 text-xs font-black uppercase tracking-wide">{selectedMatch.status}</span>
                       <h2 className="mt-4 text-3xl font-black">{selectedMatchTitle}</h2>
                       <p className="mt-2 text-sm text-white/75">{formatDate(selectedMatch.scheduled_at)} as {formatTime(selectedMatch.scheduled_at)}</p>
-                      <p className="mt-1 text-sm text-white/75">{selectedPickup ? `${selectedPickup.place} - linha ${selectedMatch.max_line_players ?? selectedPickup.max_line_players ?? selectedPickup.max_players}, goleiros ${selectedMatch.max_goalkeepers ?? selectedPickup.max_goalkeepers ?? 0}` : 'Evento avulso'}</p>
+                      <p className="mt-1 text-sm text-white/75">
+                        {selectedPickup?.place ? `${selectedPickup.place} - ` : ''}
+                        capacidade {selectedCapacity.total}: {selectedCapacity.line} linha + {selectedCapacity.goalkeepers} goleiros
+                      </p>
                     </div>
                     <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-1">
                       <Button type="button" onClick={callPlayers} disabled={savingInvite || !activePlayers.length || isSelectedMatchClosed}>
@@ -517,6 +553,10 @@ export function SchedulePage() {
                       <Button type="button" variant="secondary" onClick={openInviteWhatsApp}>
                         <MessageCircle size={16} />
                         WhatsApp
+                      </Button>
+                      <Button type="button" variant="secondary" onClick={() => setEditingCapacity(true)} disabled={isSelectedMatchClosed}>
+                        <Pencil size={16} />
+                        Editar vagas
                       </Button>
                       {hasResultsAccess && (
                         <>
@@ -542,8 +582,8 @@ export function SchedulePage() {
 
               <section className="grid gap-4 lg:grid-cols-4">
                 <Card><RoundInline icon={<Users size={18} />} label="Convidados" value={attendanceRows.length} /></Card>
-                <Card><RoundInline icon={<CheckCircle2 size={18} />} label="Linha confirmada" value={roleCounts.lineConfirmed} /></Card>
-                <Card><RoundInline icon={<CircleDashed size={18} />} label="Goleiros confirmados" value={roleCounts.goalkeeperConfirmed} /></Card>
+                <Card><RoundInline icon={<CheckCircle2 size={18} />} label="Linha confirmada" value={`${roleCounts.lineConfirmed}/${selectedCapacity.line}`} /></Card>
+                <Card><RoundInline icon={<CircleDashed size={18} />} label="Goleiros confirmados" value={`${roleCounts.goalkeeperConfirmed}/${selectedCapacity.goalkeepers}`} /></Card>
                 <Card><RoundInline icon={<CircleDashed size={18} />} label="Fila de espera" value={counts.ESPERA} /></Card>
               </section>
 
@@ -719,6 +759,35 @@ export function SchedulePage() {
         </ConfirmDialog>
       )}
 
+      {editingCapacity && selectedMatch && (
+        <ConfirmDialog
+          title="Editar limites de confirmacao"
+          description="Os limites sao independentes por posicao. Ao reduzir, os confirmados excedentes mais recentes passam para a fila de espera."
+          onClose={() => setEditingCapacity(false)}
+        >
+          <form className="grid gap-4" onSubmit={saveCapacity}>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Jogadores de linha">
+                <Input name="max_line_players" type="number" min={0} required defaultValue={selectedCapacity.line} />
+              </Field>
+              <Field label="Goleiros">
+                <Input name="max_goalkeepers" type="number" min={0} required defaultValue={selectedCapacity.goalkeepers} />
+              </Field>
+            </div>
+            <p className="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-xs font-semibold text-green-900">
+              Configuracao atual: {selectedCapacity.line} de linha + {selectedCapacity.goalkeepers} goleiros = {selectedCapacity.total} confirmados.
+            </p>
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={() => setEditingCapacity(false)} disabled={savingCapacity}>Cancelar</Button>
+              <Button disabled={savingCapacity}>
+                {savingCapacity ? <LoaderCircle className="animate-spin" size={16} /> : <Save size={16} />}
+                {savingCapacity ? 'Salvando...' : 'Salvar limites'}
+              </Button>
+            </div>
+          </form>
+        </ConfirmDialog>
+      )}
+
       {toast && (
         <div className="fixed bottom-5 left-1/2 z-[120] w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-center text-sm font-black text-green-900 shadow-2xl shadow-green-950/20 dark:border-green-900/60 dark:bg-green-950 dark:text-green-100">
           <CheckCircle2 className="mr-2 inline" size={16} />
@@ -761,7 +830,7 @@ function RoundNumber({ label, value }: { label: string; value: number }) {
   )
 }
 
-function RoundInline({ icon, label, value }: { icon: React.ReactNode; label: string; value: number }) {
+function RoundInline({ icon, label, value }: { icon: React.ReactNode; label: string; value: number | string }) {
   return (
     <div className="flex items-center gap-3">
       <div className="grid size-10 place-items-center rounded-lg bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-100">{icon}</div>
@@ -771,6 +840,12 @@ function RoundInline({ icon, label, value }: { icon: React.ReactNode; label: str
       </div>
     </div>
   )
+}
+
+function matchCapacity(match: Match, pickup: Pickup | null) {
+  const line = Number(match.max_line_players ?? pickup?.max_line_players ?? pickup?.max_players ?? 0)
+  const goalkeepers = Number(match.max_goalkeepers ?? pickup?.max_goalkeepers ?? 0)
+  return { line, goalkeepers, total: line + goalkeepers }
 }
 
 function StatusPill({ status }: { status: AttendanceStatus }) {

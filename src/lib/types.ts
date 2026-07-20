@@ -210,8 +210,21 @@ export type Payment = {
   status: PaymentStatus
   checkout_url: string | null
   pix_code: string | null
+  delivery_status?: string
   created_at: string
   player?: Pick<Player, 'id' | 'name' | 'whatsapp'>
+}
+
+export type BillingProviderStatus = {
+  public_api_url: string | null
+  whatsapp_billing_template_configured: boolean
+  providers: Record<'MANUAL_PIX' | 'ASAAS' | 'MERCADO_PAGO', {
+    charges_enabled: boolean
+    webhook_ready: boolean
+    ready: boolean
+    missing: string[]
+    webhook_url: string | null
+  }>
 }
 
 export type FinanceTransaction = {

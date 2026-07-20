@@ -5,6 +5,30 @@ import { env } from './env.js'
 
 export const paymentWebhookRouter = Router()
 
+paymentWebhookRouter.get('/', (_req, res) => {
+  return res.json({
+    status: 'ok',
+    service: 'Agenda Sport payment webhooks',
+    endpoints: ['/asaas', '/mercado-pago'],
+  })
+})
+
+paymentWebhookRouter.get('/asaas', (_req, res) => {
+  return res.json({
+    status: env.ASAAS_API_KEY && env.ASAAS_WEBHOOK_TOKEN ? 'ready' : 'configuration_required',
+    provider: 'ASAAS',
+    accepts: 'POST',
+  })
+})
+
+paymentWebhookRouter.get('/mercado-pago', (_req, res) => {
+  return res.json({
+    status: env.MERCADO_PAGO_ACCESS_TOKEN && env.MERCADO_PAGO_WEBHOOK_SECRET ? 'ready' : 'configuration_required',
+    provider: 'MERCADO_PAGO',
+    accepts: 'POST',
+  })
+})
+
 paymentWebhookRouter.post('/asaas', async (req, res) => {
   if (!env.ASAAS_WEBHOOK_TOKEN) {
     console.error('[billing:webhook] ASAAS_WEBHOOK_TOKEN is not configured')

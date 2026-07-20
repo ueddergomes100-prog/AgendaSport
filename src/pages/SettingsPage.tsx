@@ -1,12 +1,13 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { BellRing, CreditCard, LoaderCircle, MessageCircle, Pencil, Plus, Save, Settings, ShieldCheck, SlidersHorizontal, Trash2, UserCog } from 'lucide-react'
+import { BellRing, CheckCircle2, Copy, CreditCard, LoaderCircle, MessageCircle, Pencil, Plus, Save, Settings, ShieldCheck, SlidersHorizontal, Trash2, TriangleAlert, UserCog } from 'lucide-react'
 import { Button } from '../components/ui/button'
 import { Card, CardTitle } from '../components/ui/card'
 import { Field, Input, Select } from '../components/ui/field'
 import { AnimatedPage, PremiumModal } from '../components/ui/sport'
 import {
   createCompanyTeamUser,
+  getBillingProviderStatus,
   getBillingSettings,
   getCompanyIntegration,
   getCompanyTeamUsers,
@@ -33,6 +34,7 @@ const defaultSchedules: EditableSchedule[] = [
 export function SettingsPage() {
   const schedules = useQuery({ queryKey: ['confirmation-schedules'], queryFn: getConfirmationSchedules })
   const billing = useQuery({ queryKey: ['billing-settings'], queryFn: getBillingSettings })
+  const gatewayStatus = useQuery({ queryKey: ['billing-provider-status'], queryFn: getBillingProviderStatus })
   const integration = useQuery({ queryKey: ['company-integration'], queryFn: getCompanyIntegration })
   const profile = useQuery({ queryKey: ['profile'], queryFn: getProfile })
   const canManageTeamUsers = profile.data?.role === 'ADMINISTRADOR' || profile.data?.role === 'SUPER_ADMIN'
@@ -135,6 +137,18 @@ export function SettingsPage() {
     setSavingBilling(true)
     setFeedback('')
     try {
+      if (billingForm.default_provider !== 'MANUAL_PIX') {
+        if (billingForm.default_provider !== 'ASAAS' && billingForm.default_provider !== 'MERCADO_PAGO') {
+          throw new Error('O gateway salvo anteriormente nao possui integracao ativa. Selecione Asaas ou Mercado Pago.')
+        }
+        const provider = gatewayStatus.data?.providers[billingForm.default_provider]
+        if (!provider?.ready) {
+          throw new Error('Complete as credenciais do gateway no servidor antes de ativa-lo.')
+        }
+      }
+      if (billingForm.auto_charge_casual_players && billingForm.default_provider === 'MANUAL_PIX') {
+        throw new Error('Selecione e configure Asaas ou Mercado Pago para cobrar automaticamente.')
+      }
       await saveBillingSettings(billingForm)
       await billing.refetch()
       setBillingDraft(null)
@@ -332,8 +346,12 @@ export function SettingsPage() {
                 onChange={(event) => setBillingDraft({ ...billingForm, default_provider: event.target.value as BillingSettings['default_provider'] })}
               >
                 <option value="MANUAL_PIX">Manual PIX</option>
-                <option value="ASAAS">Asaas</option>
-                <option value="MERCADO_PAGO">Mercado Pago</option>
+                <option value="ASAAS" disabled={gatewayStatus.data?.providers.ASAAS.ready === false}>
+                  Asaas{gatewayStatus.data?.providers.ASAAS.ready === false ? ' - nao configurado' : ''}
+                </option>
+                <option value="MERCADO_PAGO" disabled={gatewayStatus.data?.providers.MERCADO_PAGO.ready === false}>
+                  Mercado Pago{gatewayStatus.data?.providers.MERCADO_PAGO.ready === false ? ' - nao configurado' : ''}
+                </option>
               </Select>
             </Field>
             <label className="flex items-start gap-3 rounded-xl border border-border bg-muted/50 p-4 text-sm">
@@ -375,6 +393,48 @@ export function SettingsPage() {
               {savingBilling ? 'Salvando...' : 'Salvar regras financeiras'}
             </Button>
           </form>
+
+          <div className="mt-5 border-t border-border pt-5">
+            <p className="text-sm font-black">Status dos gateways</p>
+            <div className="mt-3 grid gap-3">
+              {(['ASAAS', 'MERCADO_PAGO'] as const).map((provider) => {
+                const status = gatewayStatus.data?.providers[provider]
+                const label = provider === 'ASAAS' ? 'Asaas' : 'Mercado Pago'
+                return (
+                  <div key={provider} className="grid gap-3 rounded-lg border border-border p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        {status?.ready ? <CheckCircle2 className="text-green-700" size={17} /> : <TriangleAlert className="text-amber-700" size={17} />}
+                        <strong className="text-sm">{label}</strong>
+                        <span className="text-xs font-semibold text-muted-foreground">{status?.ready ? 'Pronto' : 'Pendente'}</span>
+                      </div>
+                      {status?.webhook_url && <p className="mt-2 truncate font-mono text-xs text-muted-foreground">{status.webhook_url}</p>}
+                      {status?.missing.length ? <p className="mt-1 text-xs text-amber-800">Faltando no servidor: {status.missing.join(', ')}</p> : null}
+                    </div>
+                    {status?.webhook_url && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="h-9 px-3"
+                        onClick={async () => {
+                          await navigator.clipboard.writeText(status.webhook_url ?? '')
+                          setFeedback(`Webhook ${label} copiado.`)
+                        }}
+                      >
+                        <Copy size={15} />
+                        Copiar
+                      </Button>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+            {gatewayStatus.data && !gatewayStatus.data.whatsapp_billing_template_configured && (
+              <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
+                O template de cobranca do WhatsApp ainda nao foi configurado para mensagens iniciadas pela empresa.
+              </p>
+            )}
+          </div>
         </Card>
       </div>
 

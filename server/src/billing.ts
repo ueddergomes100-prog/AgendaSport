@@ -6,6 +6,8 @@ import { sendWhatsAppMessage } from './whatsapp.js'
 export type BillingProvider = 'MANUAL_PIX' | 'ASAAS' | 'MERCADO_PAGO'
 export type PaymentStatus = 'PENDENTE' | 'PAGO' | 'ATRASADO' | 'CANCELADO'
 
+type PaymentDeliveryStatus = 'NOT_REQUESTED' | 'SKIPPED_ALREADY_EXISTS' | 'SKIPPED_NO_WHATSAPP' | string
+
 type CreateChargeInput = {
   tenantId: string
   playerId: string
@@ -32,7 +34,12 @@ export async function createPaymentCharge(input: CreateChargeInput) {
     : existingQuery.is('match_id', null)
   const { data: existingPayments, error: existingError } = await existingQuery
   if (existingError) throw existingError
-  if (existingPayments?.[0]) return existingPayments[0]
+  if (existingPayments?.[0]) {
+    return {
+      ...existingPayments[0],
+      delivery_status: input.sendMessage ? 'SKIPPED_ALREADY_EXISTS' : 'NOT_REQUESTED',
+    }
+  }
 
   const [{ data: player, error: playerError }, { data: company, error: companyError }] = await Promise.all([
     adminSupabase
@@ -64,6 +71,7 @@ export async function createPaymentCharge(input: CreateChargeInput) {
       ? await createMercadoPagoCharge({
         email: player.email || company.email,
         amount: input.amount,
+        dueDate: input.dueDate,
         description: input.description,
         externalReference: `${input.tenantId}:${input.matchId ?? `monthly:${input.dueDate}`}:${input.playerId}`,
       })
@@ -87,43 +95,113 @@ export async function createPaymentCharge(input: CreateChargeInput) {
     .single()
   if (error) throw error
 
-  if (input.sendMessage && player.whatsapp) {
-    const paymentLine = providerResult.checkoutUrl
-      ? `Pague por aqui: ${providerResult.checkoutUrl}`
-      : providerResult.pixCode
-        ? `PIX copia e cola: ${providerResult.pixCode}`
-        : 'O pagamento esta pendente. Consulte o organizador para receber a chave PIX.'
-    await sendWhatsAppMessage({
-      tenant_id: input.tenantId,
-      match_id: input.matchId ?? null,
-      player_id: input.playerId,
-      phone: player.whatsapp,
-      type: 'COBRANCA',
-      template: null,
-      message: [
-        `Agenda Sport - ${input.description}`,
-        '',
-        `Ola, ${player.name.split(' ')[0]}!`,
-        `Valor: ${formatCurrency(input.amount)}`,
-        `Vencimento: ${formatDate(input.dueDate)}`,
-        paymentLine,
-      ].join('\n'),
-      metadata: {
-        source: input.matchId ? 'casual_confirmation_auto_charge' : 'monthly_billing',
-        payment_id: payment.id,
+  let deliveryStatus: PaymentDeliveryStatus = 'NOT_REQUESTED'
+  if (input.sendMessage) {
+    if (player.whatsapp) {
+      const delivery = await deliverPaymentMessage({
+        tenantId: input.tenantId,
+        paymentId: payment.id,
+        matchId: input.matchId ?? null,
+        playerId: input.playerId,
+        playerName: player.name,
+        phone: player.whatsapp,
+        description: input.description,
         provider: input.provider,
-        template_parameters: [
-          player.name.split(' ')[0],
-          input.description,
-          formatCurrency(input.amount),
-          formatDate(input.dueDate),
-          providerResult.checkoutUrl || providerResult.pixCode || 'Consulte o organizador',
-        ],
-      },
-    })
+        amount: input.amount,
+        dueDate: input.dueDate,
+        checkoutUrl: providerResult.checkoutUrl,
+        pixCode: providerResult.pixCode,
+        source: input.matchId ? 'casual_confirmation_auto_charge' : 'monthly_billing',
+      })
+      deliveryStatus = delivery.status
+    } else {
+      deliveryStatus = 'SKIPPED_NO_WHATSAPP'
+    }
   }
 
-  return payment
+  return { ...payment, delivery_status: deliveryStatus }
+}
+
+export async function sendPaymentChargeMessage(tenantId: string, paymentId: string) {
+  const { data, error } = await adminSupabase
+    .from('payments')
+    .select('id, match_id, player_id, provider, amount, due_date, checkout_url, pix_code, player:players(name, whatsapp)')
+    .eq('tenant_id', tenantId)
+    .eq('id', paymentId)
+    .single()
+  if (error || !data) throw new Error('Cobranca nao encontrada.')
+
+  const payment = data as unknown as {
+    id: string
+    match_id: string | null
+    player_id: string | null
+    provider: BillingProvider
+    amount: number
+    due_date: string
+    checkout_url: string | null
+    pix_code: string | null
+    player: { name: string; whatsapp: string | null } | null
+  }
+  if (!payment.player_id || !payment.player) throw new Error('A cobranca nao possui participante vinculado.')
+  if (!payment.player.whatsapp) throw new Error('O participante nao possui WhatsApp cadastrado.')
+
+  return deliverPaymentMessage({
+    tenantId,
+    paymentId: payment.id,
+    matchId: payment.match_id,
+    playerId: payment.player_id,
+    playerName: payment.player.name,
+    phone: payment.player.whatsapp,
+    description: payment.match_id ? 'Pagamento do evento' : 'Cobranca Agenda Sport',
+    provider: payment.provider,
+    amount: Number(payment.amount),
+    dueDate: payment.due_date,
+    checkoutUrl: payment.checkout_url,
+    pixCode: payment.pix_code,
+    source: 'manual_payment_resend',
+  })
+}
+
+export function getBillingProviderStatus() {
+  const publicApiUrl = env.PUBLIC_API_URL?.replace(/\/$/, '') ?? null
+  const asaasMissing = [
+    !env.ASAAS_API_KEY ? 'ASAAS_API_KEY' : null,
+    !env.ASAAS_WEBHOOK_TOKEN ? 'ASAAS_WEBHOOK_TOKEN' : null,
+    !publicApiUrl ? 'PUBLIC_API_URL' : null,
+  ].filter((value): value is string => Boolean(value))
+  const mercadoPagoMissing = [
+    !env.MERCADO_PAGO_ACCESS_TOKEN ? 'MERCADO_PAGO_ACCESS_TOKEN' : null,
+    !env.MERCADO_PAGO_WEBHOOK_SECRET ? 'MERCADO_PAGO_WEBHOOK_SECRET' : null,
+    !publicApiUrl ? 'PUBLIC_API_URL' : null,
+  ].filter((value): value is string => Boolean(value))
+
+  return {
+    public_api_url: publicApiUrl,
+    whatsapp_billing_template_configured: Boolean(env.WHATSAPP_BILLING_TEMPLATE_NAME),
+    providers: {
+      MANUAL_PIX: {
+        charges_enabled: true,
+        webhook_ready: true,
+        ready: true,
+        missing: [],
+        webhook_url: null,
+      },
+      ASAAS: {
+        charges_enabled: Boolean(env.ASAAS_API_KEY),
+        webhook_ready: Boolean(env.ASAAS_WEBHOOK_TOKEN && publicApiUrl),
+        ready: asaasMissing.length === 0,
+        missing: asaasMissing,
+        webhook_url: publicApiUrl ? `${publicApiUrl}/api/webhooks/payments/asaas` : null,
+      },
+      MERCADO_PAGO: {
+        charges_enabled: Boolean(env.MERCADO_PAGO_ACCESS_TOKEN),
+        webhook_ready: Boolean(env.MERCADO_PAGO_WEBHOOK_SECRET && publicApiUrl),
+        ready: mercadoPagoMissing.length === 0,
+        missing: mercadoPagoMissing,
+        webhook_url: publicApiUrl ? `${publicApiUrl}/api/webhooks/payments/mercado-pago` : null,
+      },
+    },
+  }
 }
 
 export async function runMonthlyBillingForTenant(tenantId: string, options: { force?: boolean } = {}) {
@@ -195,6 +273,59 @@ export async function runMonthlyBillingForTenant(tenantId: string, options: { fo
     amount,
     due_date: dueDate,
   }
+}
+
+export async function ensureCasualChargeForConfirmation(
+  tenantId: string,
+  matchId: string,
+  playerId: string,
+) {
+  const { data: settings, error: settingsError } = await adminSupabase
+    .from('billing_settings')
+    .select('auto_charge_casual_players, default_provider')
+    .eq('tenant_id', tenantId)
+    .maybeSingle()
+
+  if (settingsError && isMissingTableError(settingsError.message, 'billing_settings')) {
+    return 'SKIPPED_SETTINGS_TABLE_MISSING'
+  }
+  if (settingsError) throw settingsError
+  if (!settings?.auto_charge_casual_players) return 'SKIPPED_DISABLED'
+
+  const { data: details, error: detailsError } = await adminSupabase
+    .from('attendance')
+    .select('player:players(id, name, type, whatsapp), match:matches(id, scheduled_at, pickup:pickups(name, casual_price))')
+    .eq('match_id', matchId)
+    .eq('player_id', playerId)
+    .single()
+  if (detailsError) throw detailsError
+
+  const row = details as unknown as {
+    player: { id: string; name: string; type: string; whatsapp: string | null } | null
+    match: { id: string; scheduled_at: string; pickup: { name: string; casual_price: number } | null } | null
+  }
+  if (row.player?.type !== 'AVULSO') return 'SKIPPED_NOT_CASUAL'
+
+  const amount = Number(row.match?.pickup?.casual_price ?? 0)
+  if (!amount) return 'SKIPPED_ZERO_AMOUNT'
+  const provider = normalizeProvider(settings.default_provider)
+  if (provider === 'MANUAL_PIX' || !getBillingProviderStatus().providers[provider].ready) {
+    return 'SKIPPED_PROVIDER_NOT_CONFIGURED'
+  }
+
+  const payment = await createPaymentCharge({
+    tenantId,
+    matchId,
+    playerId,
+    provider,
+    amount,
+    dueDate: dateInSaoPaulo(new Date()),
+    description: `Pagamento - ${row.match?.pickup?.name ?? 'Evento esportivo'}`,
+    sendMessage: true,
+  })
+  if (payment.delivery_status === 'SKIPPED_ALREADY_EXISTS') return 'SKIPPED_ALREADY_EXISTS'
+  if (payment.delivery_status === 'SENT') return 'CREATED_AND_SENT'
+  return `CREATED_${payment.delivery_status}`
 }
 
 export async function runBillingMaintenance() {
@@ -428,11 +559,36 @@ async function createAsaasCharge(input: {
     'User-Agent': 'AgendaSport/1.0',
   }
   const phone = digits(input.phone)
-  let customerId: string | null = null
+  const existingPaymentResponse = await fetch(
+    `${env.ASAAS_API_URL}/payments?externalReference=${encodeURIComponent(input.externalReference)}&limit=1`,
+    { headers },
+  )
+  const existingPaymentPayload = await parseProviderResponse(existingPaymentResponse, 'consultar cobranca no Asaas')
+  const existingPayment = existingPaymentPayload.data?.[0]
+  if (existingPayment?.id) {
+    const existingPix = await getAsaasPixCode(String(existingPayment.id), headers)
+    return {
+      providerPaymentId: String(existingPayment.id),
+      checkoutUrl: existingPayment.invoiceUrl ?? null,
+      pixCode: existingPix,
+    }
+  }
+
+  const customerExternalReference = input.externalReference.split(':').filter(Boolean).slice(-1)[0] || input.externalReference
+  const customerSearch = await fetch(
+    `${env.ASAAS_API_URL}/customers?externalReference=${encodeURIComponent(customerExternalReference)}&limit=1`,
+    { headers },
+  )
+  const customerSearchPayload = await parseProviderResponse(customerSearch, 'consultar cliente no Asaas')
+  let customerId: string | null = customerSearchPayload.data?.[0]?.id ?? null
   if (phone) {
-    const search = await fetch(`${env.ASAAS_API_URL}/customers?mobilePhone=${encodeURIComponent(phone)}&limit=1`, { headers })
-    const searchPayload = await parseProviderResponse(search, 'consultar cliente no Asaas')
-    customerId = searchPayload.data?.[0]?.id ?? null
+    const search = customerId
+      ? null
+      : await fetch(`${env.ASAAS_API_URL}/customers?mobilePhone=${encodeURIComponent(phone)}&limit=1`, { headers })
+    if (search) {
+      const searchPayload = await parseProviderResponse(search, 'consultar cliente no Asaas')
+      customerId = searchPayload.data?.[0]?.id ?? null
+    }
   }
   if (!customerId) {
     const customerResponse = await fetch(`${env.ASAAS_API_URL}/customers`, {
@@ -442,7 +598,7 @@ async function createAsaasCharge(input: {
         name: input.name,
         email: input.email || undefined,
         mobilePhone: phone || undefined,
-        externalReference: input.externalReference,
+        externalReference: customerExternalReference,
       }),
     })
     const customer = await parseProviderResponse(customerResponse, 'criar cliente no Asaas')
@@ -461,16 +617,18 @@ async function createAsaasCharge(input: {
     }),
   })
   const payment = await parseProviderResponse(paymentResponse, 'criar cobranca no Asaas')
+  const pixCode = await getAsaasPixCode(String(payment.id), headers)
   return {
     providerPaymentId: String(payment.id),
     checkoutUrl: payment.invoiceUrl ?? null,
-    pixCode: null,
+    pixCode,
   }
 }
 
 async function createMercadoPagoCharge(input: {
   email: string
   amount: number
+  dueDate: string
   description: string
   externalReference: string
 }) {
@@ -489,6 +647,7 @@ async function createMercadoPagoCharge(input: {
       description: input.description,
       payment_method_id: 'pix',
       external_reference: input.externalReference,
+      date_of_expiration: `${input.dueDate}T23:59:59.000-03:00`,
       payer: { email: input.email },
       notification_url: env.PUBLIC_API_URL
         ? `${env.PUBLIC_API_URL.replace(/\/$/, '')}/api/webhooks/payments/mercado-pago`
@@ -502,6 +661,70 @@ async function createMercadoPagoCharge(input: {
     checkoutUrl: transactionData?.ticket_url ?? null,
     pixCode: transactionData?.qr_code ?? null,
   }
+}
+
+async function getAsaasPixCode(paymentId: string, headers: Record<string, string>) {
+  try {
+    const response = await fetch(`${env.ASAAS_API_URL}/payments/${encodeURIComponent(paymentId)}/pixQrCode`, { headers })
+    const payload = await parseProviderResponse(response, 'obter PIX copia e cola no Asaas')
+    return typeof payload.payload === 'string' ? payload.payload : null
+  } catch (error) {
+    console.warn('[billing:asaas] charge created without PIX copy-and-paste code', {
+      paymentId,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return null
+  }
+}
+
+async function deliverPaymentMessage(input: {
+  tenantId: string
+  paymentId: string
+  matchId: string | null
+  playerId: string
+  playerName: string
+  phone: string
+  description: string
+  provider: BillingProvider
+  amount: number
+  dueDate: string
+  checkoutUrl: string | null
+  pixCode: string | null
+  source: string
+}) {
+  const paymentLine = input.checkoutUrl
+    ? `Pague por aqui: ${input.checkoutUrl}`
+    : input.pixCode
+      ? `PIX copia e cola: ${input.pixCode}`
+      : 'O pagamento esta pendente. Consulte o organizador para receber a chave PIX.'
+  return sendWhatsAppMessage({
+    tenant_id: input.tenantId,
+    match_id: input.matchId,
+    player_id: input.playerId,
+    phone: input.phone,
+    type: 'COBRANCA',
+    template: null,
+    message: [
+      `Agenda Sport - ${input.description}`,
+      '',
+      `Ola, ${input.playerName.split(' ')[0]}!`,
+      `Valor: ${formatCurrency(input.amount)}`,
+      `Vencimento: ${formatDate(input.dueDate)}`,
+      paymentLine,
+    ].join('\n'),
+    metadata: {
+      source: input.source,
+      payment_id: input.paymentId,
+      provider: input.provider,
+      template_parameters: [
+        input.playerName.split(' ')[0],
+        input.description,
+        formatCurrency(input.amount),
+        formatDate(input.dueDate),
+        input.checkoutUrl || input.pixCode || 'Consulte o organizador',
+      ],
+    },
+  })
 }
 
 async function parseProviderResponse(response: Response, action: string) {
@@ -525,6 +748,15 @@ function digits(value: string | null) {
 function localDate(year: number, month: number, day: number) {
   const date = new Date(year, month, day, 12, 0, 0)
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function dateInSaoPaulo(date: Date) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date)
 }
 
 function formatCurrency(value: number) {

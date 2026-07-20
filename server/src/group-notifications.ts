@@ -1,3 +1,4 @@
+import { ensureCasualChargeForConfirmation } from './billing.js'
 import { adminSupabase } from './supabase.js'
 import { sendWhatsAppMessage } from './whatsapp.js'
 
@@ -131,6 +132,9 @@ export async function notifyPromotedWaitlistPlayers(matchId: string, waitlistBef
       player: { name: string; whatsapp: string | null } | null
       match: { scheduled_at: string; notes: string | null; pickup: { name: string } | null } | null
     }
+    await ensureCasualChargeForConfirmation(typed.tenant_id, matchId, typed.player_id).catch((error) => {
+      console.warn('[billing] promoted waitlist charge failed', error)
+    })
     if (!typed.player?.whatsapp) continue
     const eventName = typed.match?.pickup?.name ?? typed.match?.notes ?? 'evento esportivo'
     const result = await sendWhatsAppMessage({

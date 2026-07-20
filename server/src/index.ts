@@ -10,8 +10,11 @@ import { env } from './env.js'
 import { requireAuth, requireSuperAdmin } from './auth.js'
 import {
   createPaymentCharge,
+  ensureCasualChargeForConfirmation,
+  getBillingProviderStatus,
   releasePlayerAfterPayment,
   runMonthlyBillingForTenant,
+  sendPaymentChargeMessage,
   startBillingWorker,
   type BillingProvider,
 } from './billing.js'
@@ -466,7 +469,17 @@ app.put('/api/matches/:matchId/attendance/:playerId', requireAuth, async (req, r
     })
   }
 
-  return res.json(attendance)
+  let chargeStatus = 'SKIPPED'
+  if (attendance.status === 'CONFIRMADO') {
+    try {
+      chargeStatus = await ensureCasualChargeForConfirmation(match.tenant_id, matchId, playerId)
+    } catch (error) {
+      chargeStatus = `FAILED: ${error instanceof Error ? error.message : 'Falha ao gerar cobranca'}`
+      console.error('[billing] manual confirmation charge failed', error)
+    }
+  }
+
+  return res.json({ ...attendance, charge_status: chargeStatus })
 })
 
 app.post('/api/matches/:matchId/group/share', requireAuth, async (req, res) => {
@@ -902,6 +915,9 @@ app.post('/api/payments', requireAuth, async (req, res) => {
     paid_at: z.string().datetime().nullable().optional(),
   })
   const input = schema.parse(req.body)
+  if (!input.player_id) {
+    return res.status(400).json({ error: 'Selecione o participante que recebera a cobranca.' })
+  }
 
   try {
     if (input.player_id && input.status === 'PENDENTE') {
@@ -913,6 +929,7 @@ app.post('/api/payments', requireAuth, async (req, res) => {
         dueDate: input.due_date,
         provider: input.provider,
         description: input.match_id ? 'Pagamento do evento' : 'Cobranca avulsa',
+        sendMessage: true,
       })
       return res.status(201).json(payment)
     }
@@ -930,6 +947,36 @@ app.post('/api/payments', requireAuth, async (req, res) => {
     return res.status(201).json(data)
   } catch (error) {
     return res.status(502).json({ error: error instanceof Error ? error.message : 'Nao foi possivel gerar a cobranca.' })
+  }
+})
+
+app.get('/api/billing/providers/status', requireAuth, (req, res) => {
+  if (!canAccessModule(req.user!, 'finance') && !canAccessModule(req.user!, 'settings')) {
+    return res.status(403).json({ error: 'Voce nao tem permissao para consultar os gateways.' })
+  }
+  return res.json(getBillingProviderStatus())
+})
+
+app.post('/api/payments/:paymentId/send', requireAuth, async (req, res) => {
+  let tenantId: string
+  try {
+    tenantId = requireRequestTenantId(req.user!)
+  } catch (error) {
+    return res.status(400).json({ error: error instanceof Error ? error.message : 'Usuario sem tenant.' })
+  }
+  if (!canAccessModule(req.user!, 'finance')) {
+    return res.status(403).json({ error: 'Voce nao tem permissao para enviar cobrancas.' })
+  }
+
+  const { paymentId } = z.object({ paymentId: z.string().uuid() }).parse(req.params)
+  try {
+    const delivery = await sendPaymentChargeMessage(tenantId, paymentId)
+    if (delivery.status !== 'SENT') {
+      return res.status(502).json({ error: 'A cobranca existe, mas o WhatsApp nao conseguiu entregar a mensagem.', delivery })
+    }
+    return res.json({ delivery })
+  } catch (error) {
+    return res.status(502).json({ error: error instanceof Error ? error.message : 'Nao foi possivel enviar a cobranca.' })
   }
 })
 

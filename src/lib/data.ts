@@ -2,6 +2,7 @@ import { supabase } from './supabase'
 import { toDbPosition } from './positions'
 import type {
   Attendance,
+  BillingProviderStatus,
   BillingSettings,
   Company,
   CompanyIntegration,
@@ -302,6 +303,19 @@ export async function updatePayment(id: string, input: Partial<Payment>) {
   return payload as Payment
 }
 
+export async function sendPaymentMessage(id: string) {
+  const { data: session } = await supabase.auth.getSession()
+  const token = session.session?.access_token
+  if (!token) throw new Error('Sessao expirada. Faca login novamente.')
+  const response = await fetch(apiUrl(`/api/payments/${id}/send`), {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(payload.error ?? 'Nao foi possivel enviar a cobranca.')
+  return payload
+}
+
 export async function getFinanceTransactions(): Promise<FinanceTransaction[]> {
   const { data: session } = await supabase.auth.getSession()
   const token = session.session?.access_token
@@ -404,6 +418,18 @@ export async function getBillingSettings(): Promise<BillingSettings | null> {
   if (error && isMissingRelationError(error.message, 'billing_settings')) return null
   if (error) throw error
   return data as BillingSettings | null
+}
+
+export async function getBillingProviderStatus(): Promise<BillingProviderStatus> {
+  const { data: session } = await supabase.auth.getSession()
+  const token = session.session?.access_token
+  if (!token) throw new Error('Sessao expirada. Faca login novamente.')
+  const response = await fetch(apiUrl('/api/billing/providers/status'), {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(payload.error ?? 'Nao foi possivel consultar os gateways.')
+  return payload as BillingProviderStatus
 }
 
 export async function saveBillingSettings(input: Pick<

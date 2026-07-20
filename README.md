@@ -99,6 +99,38 @@ npm run build
 npm run build:api
 ```
 
+## Pagamentos individuais
+
+O financeiro suporta PIX pelo Asaas e Mercado Pago. Quando um participante
+avulso confirma presenca e a opcao de cobranca automatica esta ativa, o backend:
+
+1. respeita o limite da funcao do participante;
+2. gera uma unica cobranca vinculada ao evento;
+3. salva o link e o PIX copia e cola;
+4. envia a cobranca ao WhatsApp individual;
+5. recebe o retorno do gateway e atualiza o pagamento.
+
+Webhooks de producao:
+
+```text
+https://agendasport.com.br/api/webhooks/payments/asaas
+https://agendasport.com.br/api/webhooks/payments/mercado-pago
+```
+
+Abrir esses enderecos no navegador deve retornar JSON com status `ready` ou
+`configuration_required`. As notificacoes financeiras reais chegam por
+`POST`. As credenciais ficam somente no backend.
+
+Antes de ativar, execute tambem:
+
+```text
+supabase/migrations/015_capacity_and_billing_delivery.sql
+```
+
+Essa migracao blinda os limites independentes de jogadores de linha e goleiros,
+mantem excedentes na fila da propria funcao e promove automaticamente quando
+uma vaga e liberada.
+
 ## Docker
 
 ```bash
