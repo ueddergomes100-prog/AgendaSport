@@ -9,6 +9,7 @@ type MessagePayload = {
   type: 'CONFIRMACAO' | 'COBRANCA' | 'LISTA_ESPERA' | 'LEMBRETE'
   template?: string | null
   message: string
+  recipient_type?: 'individual' | 'group'
   metadata?: Record<string, unknown> & {
     template_parameters?: string[]
   }
@@ -104,18 +105,25 @@ function getMissingLogColumn(message: string) {
 }
 
 function buildMetaMessageBody(payload: MessagePayload) {
+  const recipientType = payload.recipient_type ?? 'individual'
   const base = {
     messaging_product: 'whatsapp',
-    recipient_type: 'individual',
-    to: normalizeWhatsAppPhone(payload.phone),
+    recipient_type: recipientType,
+    to: recipientType === 'group' ? payload.phone.trim() : normalizeWhatsAppPhone(payload.phone),
   }
 
-  if (payload.type === 'CONFIRMACAO' && payload.metadata?.template_parameters?.length) {
+  const templateName = payload.type === 'CONFIRMACAO'
+    ? env.WHATSAPP_CONFIRMATION_TEMPLATE_NAME
+    : payload.type === 'COBRANCA'
+      ? env.WHATSAPP_BILLING_TEMPLATE_NAME
+      : null
+
+  if (templateName && payload.metadata?.template_parameters?.length) {
     return {
       ...base,
       type: 'template',
       template: {
-        name: env.WHATSAPP_CONFIRMATION_TEMPLATE_NAME,
+        name: templateName,
         language: {
           code: env.WHATSAPP_TEMPLATE_LANGUAGE,
         },

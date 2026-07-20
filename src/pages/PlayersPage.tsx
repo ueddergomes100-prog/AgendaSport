@@ -5,7 +5,8 @@ import { Card, CardTitle } from '../components/ui/card'
 import { Field, Input, Select, Textarea } from '../components/ui/field'
 import { Button } from '../components/ui/button'
 import { AnimatedPage, PremiumModal } from '../components/ui/sport'
-import { createPlayer, deletePlayer, getConfirmationSchedules, getCurrentCompany, getPlayers, updatePlayer } from '../lib/data'
+import { createPlayer, deletePlayer, getConfirmationSchedules, getCurrentCompany, getPlayers, getProfile, updatePlayer } from '../lib/data'
+import { hasModuleAccess } from '../lib/permissions'
 import { displayPosition, isGoalkeeperPosition, positionOptions } from '../lib/positions'
 import type { Company, ConfirmationSchedule, Player, Position } from '../lib/types'
 import { cn, getErrorMessage } from '../lib/utils'
@@ -16,6 +17,7 @@ export function PlayersPage() {
   const players = useQuery({ queryKey: ['players'], queryFn: getPlayers })
   const company = useQuery({ queryKey: ['current-company'], queryFn: getCurrentCompany })
   const schedules = useQuery({ queryKey: ['confirmation-schedules'], queryFn: getConfirmationSchedules })
+  const profile = useQuery({ queryKey: ['profile'], queryFn: getProfile })
   const [saving, setSaving] = useState(false)
   const [deletingId, setDeletingId] = useState('')
   const [feedback, setFeedback] = useState('')
@@ -44,6 +46,8 @@ export function PlayersPage() {
   const scheduleRows = useMemo(() => normalizeScheduleRows(schedules.data ?? []), [schedules.data])
   const selectedStageNumber = selectedType === 'MENSALISTA' ? 1 : 2
   const selectedSchedule = scheduleRows.find((row) => row.stage_number === selectedStageNumber)
+  const canManagePlayers = Boolean(profile.data && hasModuleAccess(profile.data, 'players'))
+  const canManageSuspensions = Boolean(profile.data && hasModuleAccess(profile.data, 'suspensions'))
 
   useEffect(() => {
     if (!formOpen) return
@@ -55,6 +59,7 @@ export function PlayersPage() {
   }, [formOpen])
 
   function openNewPlayer() {
+    if (!canManagePlayers) return
     setEditingPlayer(null)
     setSelectedType('AVULSO')
     setShowForm(true)
@@ -81,7 +86,7 @@ export function PlayersPage() {
     try {
       const form = new FormData(formElement)
       const type = String(form.get('type') || selectedType) as Player['type']
-      const payload: Partial<Player> = {
+      let payload: Partial<Player> = {
         first_name: String(form.get('first_name')).trim(),
         last_name: String(form.get('last_name')).trim(),
         phone: null,
@@ -100,6 +105,21 @@ export function PlayersPage() {
       }
 
       if (editingPlayer) {
+        if (!canManagePlayers && canManageSuspensions) {
+          payload = {
+            first_name: editingPlayer.first_name ?? getNameParts(editingPlayer).firstName,
+            last_name: editingPlayer.last_name ?? getNameParts(editingPlayer).lastName,
+            whatsapp: editingPlayer.whatsapp,
+            status: payload.status,
+            suspension_reason: payload.suspension_reason,
+            suspended_until: payload.suspended_until,
+            type: editingPlayer.type,
+            technical_score: editingPlayer.technical_score,
+            primary_position: editingPlayer.primary_position,
+            confirmation_stage: editingPlayer.confirmation_stage,
+            notes: editingPlayer.notes,
+          }
+        }
         await updatePlayer(editingPlayer.id, payload)
         setFeedback('Participante atualizado com sucesso.')
       } else {
@@ -176,10 +196,12 @@ export function PlayersPage() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2 xl:justify-end">
-            <Button type="button" className="h-12 px-5" onClick={openNewPlayer}>
-              <Plus size={18} />
-              Novo participante
-            </Button>
+            {canManagePlayers && (
+              <Button type="button" className="h-12 px-5" onClick={openNewPlayer}>
+                <Plus size={18} />
+                Novo participante
+              </Button>
+            )}
           </div>
         </div>
 
@@ -214,6 +236,8 @@ export function PlayersPage() {
                 deleting={deletingId === player.id}
                 onDelete={() => removePlayer(player)}
                 onEdit={() => openEditPlayer(player)}
+                canDelete={canManagePlayers}
+                canEdit={canManagePlayers || canManageSuspensions}
               />
             ))}
             {!filteredPlayers.length && (
@@ -225,13 +249,15 @@ export function PlayersPage() {
         </Card>
 
         <aside className="grid gap-4">
-          <RegistrationInviteCard
-            company={company.data ?? null}
-            loading={company.isLoading}
-            registrationUrl={registrationUrl}
-            onCopyLink={copyRegistrationLink}
-            onCopyInvite={copyRegistrationInvite}
-          />
+          {canManagePlayers && (
+            <RegistrationInviteCard
+              company={company.data ?? null}
+              loading={company.isLoading}
+              registrationUrl={registrationUrl}
+              onCopyLink={copyRegistrationLink}
+              onCopyInvite={copyRegistrationInvite}
+            />
+          )}
 
           <Card className="scoreboard">
             <div className="flex items-center justify-between gap-4">
@@ -275,12 +301,12 @@ export function PlayersPage() {
               const nameParts = getNameParts(editingPlayer)
               return (
             <div className="grid gap-3 md:grid-cols-2">
-              <Field label="Nome"><Input name="first_name" required minLength={2} defaultValue={nameParts.firstName} /></Field>
-              <Field label="Sobrenome"><Input name="last_name" required minLength={2} defaultValue={nameParts.lastName} /></Field>
-              <Field label="WhatsApp"><Input name="whatsapp" required defaultValue={editingPlayer?.whatsapp ?? ''} /></Field>
-              <Field label="Nota"><Input name="technical_score" type="number" min={1} max={10} defaultValue={editingPlayer?.technical_score ?? 5} /></Field>
+              <Field label="Nome"><Input name="first_name" required minLength={2} disabled={!canManagePlayers} defaultValue={nameParts.firstName} /></Field>
+              <Field label="Sobrenome"><Input name="last_name" required minLength={2} disabled={!canManagePlayers} defaultValue={nameParts.lastName} /></Field>
+              <Field label="WhatsApp"><Input name="whatsapp" required disabled={!canManagePlayers} defaultValue={editingPlayer?.whatsapp ?? ''} /></Field>
+              <Field label="Nota"><Input name="technical_score" type="number" min={1} max={10} disabled={!canManagePlayers} defaultValue={editingPlayer?.technical_score ?? 5} /></Field>
               <Field label="Posicao">
-                <Select name="primary_position" defaultValue={isGoalkeeperPosition(editingPlayer?.primary_position) ? 'GOLEIRO' : 'LINHA'}>
+                <Select name="primary_position" disabled={!canManagePlayers} defaultValue={isGoalkeeperPosition(editingPlayer?.primary_position) ? 'GOLEIRO' : 'LINHA'}>
                   {positions.map((item) => <option key={item} value={item}>{displayPosition(item)}</option>)}
                 </Select>
               </Field>
@@ -292,7 +318,7 @@ export function PlayersPage() {
                 </Select>
               </Field>
               <Field label="Tipo do participante">
-                <Select name="type" value={selectedType} onChange={(event) => setSelectedType(event.target.value as Player['type'])}>
+                <Select name="type" disabled={!canManagePlayers} value={selectedType} onChange={(event) => setSelectedType(event.target.value as Player['type'])}>
                   <option value="AVULSO">Avulso / geral</option>
                   <option value="MENSALISTA">Mensalista / prioridade</option>
                 </Select>
@@ -305,7 +331,7 @@ export function PlayersPage() {
               {formatProfilePreview(selectedType, selectedSchedule)}
             </div>
 
-            <Field label="Observacoes"><Textarea name="notes" defaultValue={editingPlayer?.notes ?? ''} /></Field>
+            <Field label="Observacoes"><Textarea name="notes" disabled={!canManagePlayers} defaultValue={editingPlayer?.notes ?? ''} /></Field>
             <div className="grid gap-3 md:grid-cols-2">
               <Field label="Motivo da suspensao"><Input name="suspension_reason" defaultValue={editingPlayer?.suspension_reason ?? ''} placeholder="Obrigatorio apenas se suspenso" /></Field>
               <Field label="Suspenso ate"><Input name="suspended_until" type="date" defaultValue={editingPlayer?.suspended_until ?? ''} /></Field>
@@ -478,7 +504,21 @@ function StatusPill({ status }: { status: Player['status'] }) {
   return <span className={cn('rounded-full px-3 py-1 text-xs font-black', styles[status])}>{status}</span>
 }
 
-function PlayerRosterCard({ player, deleting, onDelete, onEdit }: { player: Player; deleting: boolean; onDelete: () => void; onEdit: () => void }) {
+function PlayerRosterCard({
+  player,
+  deleting,
+  onDelete,
+  onEdit,
+  canDelete,
+  canEdit,
+}: {
+  player: Player
+  deleting: boolean
+  onDelete: () => void
+  onEdit: () => void
+  canDelete: boolean
+  canEdit: boolean
+}) {
   return (
     <div className="rounded-xl border border-border bg-white/75 p-4 shadow-sm transition hover:border-primary/35 hover:bg-green-50/35 dark:bg-slate-950/40 dark:hover:bg-green-950/15">
       <div className="grid gap-4 xl:grid-cols-[minmax(240px,1.2fr)_minmax(170px,0.8fr)_minmax(170px,0.8fr)_auto] xl:items-center">
@@ -510,16 +550,22 @@ function PlayerRosterCard({ player, deleting, onDelete, onEdit }: { player: Play
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-2 xl:w-28 xl:grid-cols-1">
-          <Button type="button" variant="secondary" onClick={onEdit}>
-            <Pencil size={16} />
-            Editar
-          </Button>
-          <Button type="button" variant="danger" onClick={onDelete} disabled={deleting}>
-            {deleting ? <LoaderCircle className="animate-spin" size={16} /> : <Trash2 size={16} />}
-            Excluir
-          </Button>
-        </div>
+        {(canEdit || canDelete) && (
+          <div className="grid grid-cols-2 gap-2 xl:w-28 xl:grid-cols-1">
+            {canEdit && (
+              <Button type="button" variant="secondary" onClick={onEdit}>
+                <Pencil size={16} />
+                Editar
+              </Button>
+            )}
+            {canDelete && (
+              <Button type="button" variant="danger" onClick={onDelete} disabled={deleting}>
+                {deleting ? <LoaderCircle className="animate-spin" size={16} /> : <Trash2 size={16} />}
+                Excluir
+              </Button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )

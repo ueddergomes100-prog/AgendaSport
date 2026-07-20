@@ -1,6 +1,12 @@
 import { Router } from 'express'
 import { z } from 'zod'
+import { createPaymentCharge, type BillingProvider } from './billing.js'
 import { env } from './env.js'
+import {
+  getWaitlistPlayerIds,
+  notifyGroupAttendanceUpdate,
+  notifyPromotedWaitlistPlayers,
+} from './group-notifications.js'
 import { adminSupabase } from './supabase.js'
 import { insertMessageLog, sendWhatsAppMessage } from './whatsapp.js'
 
@@ -289,24 +295,36 @@ async function processAttendanceReply(fromPhone: string, replyStatus: Attendance
     }
   }
 
-  const error = replyStatus === 'ESPERA'
-    ? await updateAttendanceToWaitlist(attendance)
-    : await updateAttendanceByRpc(attendance, replyStatus)
+  const waitlistBefore = await getWaitlistPlayerIds(attendance.match_id)
+  const updateResult = await updateAttendanceByRpc(attendance, replyStatus)
 
-  if (error) {
+  if (updateResult.error) {
     return {
       tenantId: attendance.tenant_id,
       matchId: attendance.match_id,
       playerId: attendance.player_id,
       status: 'FAILED',
-      response: error.message,
+      response: updateResult.error.message,
       handled: false,
       reason: 'attendance_update_failed',
     }
   }
 
-  const chargeStatus = replyStatus === 'CONFIRMADO'
-    ? await ensureCasualChargeForConfirmation(attendance, fromPhone)
+  const finalStatus = normalizeAttendanceResult(updateResult.data, replyStatus)
+  await notifyPromotedWaitlistPlayers(attendance.match_id, waitlistBefore).catch((error) => {
+    console.warn('[whatsapp:webhook] failed to notify promoted waitlist player', error)
+  })
+  await notifyGroupAttendanceUpdate({
+    tenantId: attendance.tenant_id,
+    matchId: attendance.match_id,
+    playerId: attendance.player_id,
+    status: finalStatus,
+  }).catch((error) => {
+    console.warn('[whatsapp:webhook] failed to update configured WhatsApp group', error)
+  })
+
+  const chargeStatus = finalStatus === 'CONFIRMADO'
+    ? await ensureCasualChargeForConfirmation(attendance)
     : 'SKIPPED'
 
   return {
@@ -314,14 +332,14 @@ async function processAttendanceReply(fromPhone: string, replyStatus: Attendance
     matchId: attendance.match_id,
     playerId: attendance.player_id,
     status: 'PROCESSED',
-    response: `Attendance updated to ${replyStatus}`,
+    response: `Attendance updated to ${finalStatus}`,
     handled: true,
-    replyStatus,
+    replyStatus: finalStatus,
     chargeStatus,
   }
 }
 
-async function ensureCasualChargeForConfirmation(attendance: AttendanceCandidate, inboundPhone: string) {
+async function ensureCasualChargeForConfirmation(attendance: AttendanceCandidate) {
   const { data: settings, error: settingsError } = await adminSupabase
     .from('billing_settings')
     .select('auto_charge_casual_players, default_provider')
@@ -359,42 +377,15 @@ async function ensureCasualChargeForConfirmation(attendance: AttendanceCandidate
   if (existingError) throw existingError
   if (existing?.length) return 'SKIPPED_ALREADY_EXISTS'
 
-  const { data: payment, error: paymentError } = await adminSupabase
-    .from('payments')
-    .insert({
-      tenant_id: attendance.tenant_id,
-      match_id: attendance.match_id,
-      player_id: attendance.player_id,
-      provider: settings.default_provider ?? 'MANUAL_PIX',
-      amount,
-      due_date: new Date().toISOString().slice(0, 10),
-      status: 'PENDENTE',
-    })
-    .select('id')
-    .single()
-  if (paymentError) throw paymentError
-
-  const phone = row.player.whatsapp || inboundPhone
-  await sendWhatsAppMessage({
-    tenant_id: attendance.tenant_id,
-    match_id: attendance.match_id,
-    player_id: attendance.player_id,
-    phone,
-    type: 'COBRANCA',
-    template: null,
-    message: [
-      'Agenda Sport - cobranca do evento',
-      '',
-      `Ola, ${row.player.name.split(' ')[0]}! Sua presenca foi confirmada.`,
-      `Evento: ${row.match?.pickup?.name ?? 'Evento esportivo'}`,
-      `Valor: ${formatCurrency(amount)}`,
-      '',
-      'Pagamento pendente. O organizador informara a forma de pagamento ou link quando disponivel.',
-    ].join('\n'),
-    metadata: {
-      source: 'casual_confirmation_auto_charge',
-      payment_id: payment.id,
-    },
+  await createPaymentCharge({
+    tenantId: attendance.tenant_id,
+    matchId: attendance.match_id,
+    playerId: attendance.player_id,
+    provider: normalizeBillingProvider(settings.default_provider),
+    amount,
+    dueDate: new Date().toISOString().slice(0, 10),
+    description: `Pagamento - ${row.match?.pickup?.name ?? 'Evento esportivo'}`,
+    sendMessage: true,
   })
 
   return 'CREATED'
@@ -450,44 +441,28 @@ function acknowledgementMessage(replyStatus: AttendanceReplyStatus) {
 }
 
 async function updateAttendanceByRpc(attendance: AttendanceCandidate, replyStatus: AttendanceReplyStatus) {
-  const { error } = await adminSupabase.rpc('set_attendance_response', {
+  const current = await adminSupabase.rpc('set_attendance_response', {
     p_match_id: attendance.match_id,
     p_player_id: attendance.player_id,
     p_status: replyStatus,
+    p_source: 'WHATSAPP',
+    p_responded_by: null,
   })
-  return error
+  if (current.error && current.error.message.includes('Could not find the function')) {
+    return adminSupabase.rpc('set_attendance_response', {
+      p_match_id: attendance.match_id,
+      p_player_id: attendance.player_id,
+      p_status: replyStatus,
+    })
+  }
+  return current
 }
 
-async function updateAttendanceToWaitlist(attendance: AttendanceCandidate) {
-  const { data: queued, error: queueError } = await adminSupabase
-    .from('attendance')
-    .select('queue_position')
-    .eq('match_id', attendance.match_id)
-    .eq('status', 'ESPERA')
-    .order('queue_position', { ascending: false, nullsFirst: false })
-    .limit(1)
-  if (queueError) return queueError
-
-  const nextQueuePosition = Number(queued?.[0]?.queue_position ?? 0) + 1
-  const { error } = await adminSupabase.from('attendance').upsert(
-    {
-      tenant_id: attendance.tenant_id,
-      match_id: attendance.match_id,
-      player_id: attendance.player_id,
-      status: 'ESPERA',
-      responded_at: new Date().toISOString(),
-      queue_position: nextQueuePosition,
-    },
-    { onConflict: 'match_id,player_id' },
-  )
-  if (error) return error
-
-  if (['CONFIRMADO', 'COMPARECEU'].includes(attendance.status)) {
-    const { error: promoteError } = await adminSupabase.rpc('promote_waitlist', { p_match_id: attendance.match_id })
-    if (promoteError) return promoteError
-  }
-
-  return null
+function normalizeAttendanceResult(value: unknown, fallback: AttendanceReplyStatus): AttendanceReplyStatus {
+  if (!value || typeof value !== 'object' || !('status' in value)) return fallback
+  const status = String(value.status)
+  if (status === 'CONFIRMADO' || status === 'RECUSOU' || status === 'ESPERA') return status
+  return fallback
 }
 
 async function findPlayersByPhone(fromPhone: string): Promise<PlayerCandidate[]> {
@@ -531,8 +506,9 @@ function isMissingBillingSettingsError(message: string) {
   return message.includes('billing_settings') && (message.includes('schema cache') || message.includes('does not exist') || message.includes('relation'))
 }
 
-function formatCurrency(value: number) {
-  return value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+function normalizeBillingProvider(provider: string | null): BillingProvider {
+  if (provider === 'ASAAS' || provider === 'MERCADO_PAGO') return provider
+  return 'MANUAL_PIX'
 }
 
 function phoneVariants(digits: string) {

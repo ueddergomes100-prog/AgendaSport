@@ -58,6 +58,8 @@ export function FinancePage() {
       amount: Number(payment.amount),
       kind: 'RECEITA' as const,
       status: payment.status,
+      responsible: 'Sistema',
+      paymentMethod: payment.provider,
     }))
     const transactionItems = (transactions.data ?? []).map((item) => ({
       id: `transaction-${item.id}`,
@@ -68,6 +70,8 @@ export function FinancePage() {
       kind: item.kind,
       status: item.status,
       raw: item,
+      responsible: item.responsible?.full_name ?? 'Sistema',
+      paymentMethod: item.payment_method,
     }))
     return [...paymentItems, ...transactionItems].sort((left, right) => new Date(right.date).getTime() - new Date(left.date).getTime()).slice(0, 20)
   }, [payments.data, transactions.data])
@@ -114,6 +118,7 @@ export function FinancePage() {
         amount: Number(form.get('amount') || 0),
         occurred_on: String(form.get('occurred_on')),
         status: String(form.get('status')) as FinanceTransaction['status'],
+        payment_method: String(form.get('payment_method') || 'OUTRO'),
       })
       await refreshFinance()
       setModalMode(null)
@@ -267,7 +272,9 @@ export function FinancePage() {
                   <span className={`rounded-full px-2.5 py-1 text-xs font-black ${item.kind === 'DESPESA' ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}`}>{item.kind}</span>
                   <p className="font-black">{item.title}</p>
                 </div>
-                <p className="mt-1 text-xs text-muted-foreground">{formatDate(item.date)} - {item.description}</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {formatDate(item.date)} - {item.description} - {item.paymentMethod} - por {item.responsible}
+                </p>
               </div>
               <p className={`text-lg font-black ${item.kind === 'DESPESA' ? 'text-red-700' : 'text-green-800'}`}>{item.kind === 'DESPESA' ? '-' : '+'}{money(item.amount)}</p>
               {'raw' in item && item.raw ? (
@@ -297,8 +304,6 @@ export function FinancePage() {
                   <option value="MANUAL_PIX">Manual PIX</option>
                   <option value="ASAAS">Asaas</option>
                   <option value="MERCADO_PAGO">Mercado Pago</option>
-                  <option value="STONE">Stone</option>
-                  <option value="VINDI">Vindi</option>
                 </Select>
               </Field>
               <Field label="Valor"><Input name="amount" required type="number" min={0.01} step="0.01" /></Field>
@@ -352,6 +357,16 @@ function TransactionForm({ saving, onSubmit }: { saving: boolean; onSubmit: (eve
             <option value="CONFIRMADO">Confirmado</option>
             <option value="PENDENTE">Pendente</option>
             <option value="CANCELADO">Cancelado</option>
+          </Select>
+        </Field>
+        <Field label="Forma de pagamento">
+          <Select name="payment_method" defaultValue="PIX">
+            <option value="PIX">PIX</option>
+            <option value="DINHEIRO">Dinheiro</option>
+            <option value="CARTAO">Cartao</option>
+            <option value="TRANSFERENCIA">Transferencia</option>
+            <option value="BOLETO">Boleto</option>
+            <option value="OUTRO">Outro</option>
           </Select>
         </Field>
       </div>

@@ -1,19 +1,23 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { BellRing, CreditCard, LoaderCircle, Plus, Save, Settings, ShieldCheck, SlidersHorizontal, Trash2, UserCog } from 'lucide-react'
+import { BellRing, CreditCard, LoaderCircle, MessageCircle, Pencil, Plus, Save, Settings, ShieldCheck, SlidersHorizontal, Trash2, UserCog } from 'lucide-react'
 import { Button } from '../components/ui/button'
 import { Card, CardTitle } from '../components/ui/card'
 import { Field, Input, Select } from '../components/ui/field'
-import { AnimatedPage } from '../components/ui/sport'
+import { AnimatedPage, PremiumModal } from '../components/ui/sport'
 import {
   createCompanyTeamUser,
   getBillingSettings,
+  getCompanyIntegration,
   getCompanyTeamUsers,
   getConfirmationSchedules,
+  getProfile,
   saveBillingSettings,
+  saveCompanyIntegration,
   saveConfirmationSchedules,
+  updateCompanyTeamUser,
 } from '../lib/data'
-import type { BillingSettings, ConfirmationSchedule, PermissionKey, TeamPermissions, UserRole } from '../lib/types'
+import type { BillingSettings, CompanyIntegration, ConfirmationSchedule, PermissionKey, TeamPermissions, TeamUser, UserRole } from '../lib/types'
 import { getErrorMessage } from '../lib/utils'
 
 type EditableSchedule = Pick<ConfirmationSchedule, 'stage_number' | 'days_before' | 'send_time' | 'enabled'>
@@ -29,12 +33,27 @@ const defaultSchedules: EditableSchedule[] = [
 export function SettingsPage() {
   const schedules = useQuery({ queryKey: ['confirmation-schedules'], queryFn: getConfirmationSchedules })
   const billing = useQuery({ queryKey: ['billing-settings'], queryFn: getBillingSettings })
-  const teamUsers = useQuery({ queryKey: ['company-team-users'], queryFn: getCompanyTeamUsers })
+  const integration = useQuery({ queryKey: ['company-integration'], queryFn: getCompanyIntegration })
+  const profile = useQuery({ queryKey: ['profile'], queryFn: getProfile })
+  const canManageTeamUsers = profile.data?.role === 'ADMINISTRADOR' || profile.data?.role === 'SUPER_ADMIN'
+  const teamUsers = useQuery({
+    queryKey: ['company-team-users'],
+    queryFn: getCompanyTeamUsers,
+    enabled: canManageTeamUsers,
+  })
   const [scheduleDraft, setScheduleDraft] = useState<EditableSchedule[] | null>(null)
-  const [billingDraft, setBillingDraft] = useState<Pick<BillingSettings, 'monthly_billing_day' | 'default_provider' | 'auto_charge_casual_players'> | null>(null)
+  const [billingDraft, setBillingDraft] = useState<Pick<
+    BillingSettings,
+    'monthly_billing_day' | 'default_provider' | 'auto_charge_casual_players' | 'auto_suspend_overdue' | 'overdue_grace_days'
+  > | null>(null)
+  const [integrationDraft, setIntegrationDraft] = useState<Pick<CompanyIntegration, 'whatsapp_group_enabled' | 'whatsapp_group_id'> | null>(null)
+  const [editingTeamUser, setEditingTeamUser] = useState<TeamUser | null>(null)
+  const [editingPermissions, setEditingPermissions] = useState<TeamPermissions>({})
+  const [editingRole, setEditingRole] = useState<Extract<UserRole, 'ADMINISTRADOR' | 'ORGANIZADOR' | 'OPERADOR'>>('OPERADOR')
   const [savingSchedules, setSavingSchedules] = useState(false)
   const [savingBilling, setSavingBilling] = useState(false)
   const [savingTeamUser, setSavingTeamUser] = useState(false)
+  const [savingIntegration, setSavingIntegration] = useState(false)
   const [feedback, setFeedback] = useState('')
 
   const savedScheduleRows = useMemo(() => {
@@ -56,11 +75,22 @@ export function SettingsPage() {
       monthly_billing_day: billing.data?.monthly_billing_day ?? 2,
       default_provider: billing.data?.default_provider ?? 'MANUAL_PIX',
       auto_charge_casual_players: billing.data?.auto_charge_casual_players ?? false,
-    } satisfies Pick<BillingSettings, 'monthly_billing_day' | 'default_provider' | 'auto_charge_casual_players'>
+      auto_suspend_overdue: billing.data?.auto_suspend_overdue ?? false,
+      overdue_grace_days: billing.data?.overdue_grace_days ?? 5,
+    } satisfies Pick<
+      BillingSettings,
+      'monthly_billing_day' | 'default_provider' | 'auto_charge_casual_players' | 'auto_suspend_overdue' | 'overdue_grace_days'
+    >
   }, [billing.data])
+
+  const savedIntegrationForm = useMemo(() => ({
+    whatsapp_group_enabled: integration.data?.whatsapp_group_enabled ?? false,
+    whatsapp_group_id: integration.data?.whatsapp_group_id ?? '',
+  }), [integration.data])
 
   const scheduleRows = scheduleDraft ?? savedScheduleRows
   const billingForm = billingDraft ?? savedBillingForm
+  const integrationForm = integrationDraft ?? savedIntegrationForm
   const activeScheduleRows = scheduleRows.filter((row) => row.enabled)
   const nextDisabledSchedule = scheduleRows.find((row) => !row.enabled)
 
@@ -116,6 +146,28 @@ export function SettingsPage() {
     }
   }
 
+  async function submitIntegration(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setSavingIntegration(true)
+    setFeedback('')
+    try {
+      if (integrationForm.whatsapp_group_enabled && !integrationForm.whatsapp_group_id?.trim()) {
+        throw new Error('Informe o ID oficial do grupo antes de ativar a integracao.')
+      }
+      await saveCompanyIntegration({
+        whatsapp_group_enabled: integrationForm.whatsapp_group_enabled,
+        whatsapp_group_id: integrationForm.whatsapp_group_id?.trim() || null,
+      })
+      await integration.refetch()
+      setIntegrationDraft(null)
+      setFeedback('Configuracao do grupo salva com sucesso.')
+    } catch (error) {
+      setFeedback(getErrorMessage(error, 'Nao foi possivel salvar a configuracao do grupo.'))
+    } finally {
+      setSavingIntegration(false)
+    }
+  }
+
   async function submitTeamUser(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setSavingTeamUser(true)
@@ -124,13 +176,8 @@ export function SettingsPage() {
       const form = new FormData(event.currentTarget)
       const role = String(form.get('role') || 'OPERADOR') as Extract<UserRole, 'ADMINISTRADOR' | 'ORGANIZADOR' | 'OPERADOR'>
       const permissions: TeamPermissions = role === 'ADMINISTRADOR'
-        ? { confirmations: true, stats: true, finance: true, settings: true }
-        : {
-          confirmations: form.get('confirmations') === 'on',
-          stats: form.get('stats') === 'on',
-          finance: form.get('finance') === 'on',
-          settings: form.get('settings') === 'on',
-        }
+        ? fullPermissions()
+        : Object.fromEntries(permissionEntries.map((item) => [item.key, form.get(item.key) === 'on']))
 
       await createCompanyTeamUser({
         fullName: String(form.get('full_name') || '').trim(),
@@ -144,6 +191,32 @@ export function SettingsPage() {
       setFeedback('Acesso da equipe criado com sucesso.')
     } catch (error) {
       setFeedback(getErrorMessage(error, 'Nao foi possivel criar o acesso.'))
+    } finally {
+      setSavingTeamUser(false)
+    }
+  }
+
+  function openTeamUserEditor(user: TeamUser) {
+    setEditingTeamUser(user)
+    setEditingRole(user.role as Extract<UserRole, 'ADMINISTRADOR' | 'ORGANIZADOR' | 'OPERADOR'>)
+    setEditingPermissions(user.permissions ?? {})
+  }
+
+  async function saveTeamUserAccess() {
+    if (!editingTeamUser) return
+    setSavingTeamUser(true)
+    setFeedback('')
+    try {
+      await updateCompanyTeamUser({
+        id: editingTeamUser.id,
+        role: editingRole,
+        permissions: editingRole === 'ADMINISTRADOR' ? fullPermissions() : editingPermissions,
+      })
+      await teamUsers.refetch()
+      setEditingTeamUser(null)
+      setFeedback('Permissoes atualizadas. Elas serao aplicadas no proximo carregamento do usuario.')
+    } catch (error) {
+      setFeedback(getErrorMessage(error, 'Nao foi possivel atualizar as permissoes.'))
     } finally {
       setSavingTeamUser(false)
     }
@@ -261,8 +334,6 @@ export function SettingsPage() {
                 <option value="MANUAL_PIX">Manual PIX</option>
                 <option value="ASAAS">Asaas</option>
                 <option value="MERCADO_PAGO">Mercado Pago</option>
-                <option value="STONE">Stone</option>
-                <option value="VINDI">Vindi</option>
               </Select>
             </Field>
             <label className="flex items-start gap-3 rounded-xl border border-border bg-muted/50 p-4 text-sm">
@@ -277,6 +348,27 @@ export function SettingsPage() {
                 <span className="mt-1 block text-muted-foreground">Quando o gateway for conectado, a confirmacao SIM podera gerar cobranca automaticamente.</span>
               </span>
             </label>
+            <label className="flex items-start gap-3 rounded-xl border border-border bg-muted/50 p-4 text-sm">
+              <input
+                type="checkbox"
+                className="mt-0.5 size-5 accent-green-700"
+                checked={billingForm.auto_suspend_overdue}
+                onChange={(event) => setBillingDraft({ ...billingForm, auto_suspend_overdue: event.currentTarget.checked })}
+              />
+              <span>
+                <strong className="block">Suspender mensalista inadimplente</strong>
+                <span className="mt-1 block text-muted-foreground">A suspensao automatica ocorre depois do prazo de tolerancia e e retirada quando nao houver pendencia vencida.</span>
+              </span>
+            </label>
+            <Field label="Dias de tolerancia apos o vencimento">
+              <Input
+                type="number"
+                min={0}
+                max={90}
+                value={billingForm.overdue_grace_days}
+                onChange={(event) => setBillingDraft({ ...billingForm, overdue_grace_days: clampNumber(event.target.value, 0, 90) })}
+              />
+            </Field>
 
             <Button className="min-h-12" disabled={savingBilling || billing.isLoading}>
               {savingBilling ? <LoaderCircle className="animate-spin" size={16} /> : <SlidersHorizontal size={16} />}
@@ -287,6 +379,43 @@ export function SettingsPage() {
       </div>
 
       <Card>
+        <div className="flex items-start gap-3">
+          <div className="grid size-11 place-items-center rounded-xl bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-100">
+            <MessageCircle size={20} />
+          </div>
+          <div>
+            <CardTitle>Grupo oficial do WhatsApp</CardTitle>
+            <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
+              Atualiza confirmacoes, fila e sorteio no grupo quando a conta Meta estiver habilitada para a API oficial de grupos.
+            </p>
+          </div>
+        </div>
+
+        <form className="mt-5 grid gap-4 md:grid-cols-[minmax(0,1fr)_220px] md:items-end" onSubmit={submitIntegration}>
+          <Field label="ID oficial do grupo">
+            <Input
+              value={integrationForm.whatsapp_group_id ?? ''}
+              onChange={(event) => setIntegrationDraft({ ...integrationForm, whatsapp_group_id: event.target.value })}
+              placeholder="Ex.: 123456789012345@g.us ou ID fornecido pela Meta"
+            />
+          </Field>
+          <label className="flex min-h-12 items-center gap-3 rounded-xl border border-border bg-muted/50 px-4 py-3 text-sm font-bold">
+            <input
+              type="checkbox"
+              className="size-5 accent-green-700"
+              checked={integrationForm.whatsapp_group_enabled}
+              onChange={(event) => setIntegrationDraft({ ...integrationForm, whatsapp_group_enabled: event.currentTarget.checked })}
+            />
+            Integracao ativa
+          </label>
+          <Button className="min-h-12 md:col-span-2 md:w-fit" disabled={savingIntegration || integration.isLoading}>
+            {savingIntegration ? <LoaderCircle className="animate-spin" size={16} /> : <Save size={16} />}
+            {savingIntegration ? 'Salvando...' : 'Salvar grupo'}
+          </Button>
+        </form>
+      </Card>
+
+      {canManageTeamUsers && <Card>
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="flex items-start gap-3">
             <div className="grid size-11 place-items-center rounded-xl bg-slate-950 text-white dark:bg-white dark:text-slate-950">
@@ -325,10 +454,14 @@ export function SettingsPage() {
           </div>
 
           <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-            <PermissionCheckbox name="confirmations" label="Convocacoes e agenda" defaultChecked />
-            <PermissionCheckbox name="stats" label="Sumula e sorteio" />
-            <PermissionCheckbox name="finance" label="Financeiro" />
-            <PermissionCheckbox name="settings" label="Configuracoes" />
+            {permissionEntries.map((item) => (
+              <PermissionCheckbox
+                key={item.key}
+                name={item.key}
+                label={item.label}
+                defaultChecked={item.key === 'confirmations'}
+              />
+            ))}
           </div>
 
           <Button className="min-h-12 w-full sm:w-fit" disabled={savingTeamUser}>
@@ -354,6 +487,10 @@ export function SettingsPage() {
                   </span>
                 ))}
               </div>
+              <Button type="button" variant="secondary" className="mt-4 h-10 w-full" onClick={() => openTeamUserEditor(user)}>
+                <Pencil size={15} />
+                Editar permissoes
+              </Button>
             </div>
           ))}
           {!teamUsers.isLoading && !teamUsers.data?.length && (
@@ -362,17 +499,63 @@ export function SettingsPage() {
             </p>
           )}
         </div>
-      </Card>
+      </Card>}
+
+      {canManageTeamUsers && editingTeamUser && (
+        <PremiumModal title={`Permissoes de ${editingTeamUser.full_name}`} kicker="Acesso da equipe" icon={UserCog} onClose={() => setEditingTeamUser(null)}>
+          <div className="grid gap-4">
+            <Field label="Perfil">
+              <Select value={editingRole} onChange={(event) => setEditingRole(event.target.value as typeof editingRole)}>
+                <option value="OPERADOR">Operador</option>
+                <option value="ORGANIZADOR">Organizador</option>
+                <option value="ADMINISTRADOR">Administrador total</option>
+              </Select>
+            </Field>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {permissionEntries.map((item) => (
+                <label key={item.key} className="flex min-h-12 items-center gap-3 rounded-xl border border-border bg-muted/35 px-3 py-2 text-sm font-bold">
+                  <input
+                    type="checkbox"
+                    checked={editingRole === 'ADMINISTRADOR' || Boolean(editingPermissions[item.key])}
+                    disabled={editingRole === 'ADMINISTRADOR'}
+                    onChange={(event) => setEditingPermissions({
+                      ...editingPermissions,
+                      [item.key]: event.currentTarget.checked,
+                    })}
+                    className="size-5 accent-green-700"
+                  />
+                  <span>{item.label}</span>
+                </label>
+              ))}
+            </div>
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={() => setEditingTeamUser(null)}>Cancelar</Button>
+              <Button type="button" onClick={saveTeamUserAccess} disabled={savingTeamUser}>
+                {savingTeamUser ? <LoaderCircle className="animate-spin" size={16} /> : <Save size={16} />}
+                {savingTeamUser ? 'Salvando...' : 'Salvar permissoes'}
+              </Button>
+            </div>
+          </div>
+        </PremiumModal>
+      )}
     </AnimatedPage>
   )
 }
 
 const permissionEntries: Array<{ key: PermissionKey; label: string }> = [
-  { key: 'confirmations', label: 'Convocacoes' },
-  { key: 'stats', label: 'Sumula' },
+  { key: 'confirmations', label: 'Convocacoes e agenda' },
+  { key: 'players', label: 'Cadastro de participantes' },
+  { key: 'suspensions', label: 'Suspensoes' },
+  { key: 'draw', label: 'Sorteio' },
+  { key: 'results', label: 'Sumula e resultados' },
+  { key: 'stats', label: 'Relatorios estatisticos' },
   { key: 'finance', label: 'Financeiro' },
-  { key: 'settings', label: 'Config.' },
+  { key: 'settings', label: 'Configuracoes e acessos' },
 ]
+
+function fullPermissions(): TeamPermissions {
+  return Object.fromEntries(permissionEntries.map((item) => [item.key, true]))
+}
 
 function PermissionCheckbox({ name, label, defaultChecked }: { name: PermissionKey; label: string; defaultChecked?: boolean }) {
   return (

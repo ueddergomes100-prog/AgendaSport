@@ -560,7 +560,11 @@ export async function runConfirmationReminderJob(options: { tenantId?: string | 
   return summary
 }
 
-export async function sendConfirmationForMatch(matchId: string, tenantId?: string | null): Promise<MatchConfirmationSummary> {
+export async function sendConfirmationForMatch(
+  matchId: string,
+  tenantId?: string | null,
+  onlyPlayerId?: string,
+): Promise<MatchConfirmationSummary> {
   const match = await getMatchForConfirmation(matchId, tenantId)
   const summary: MatchConfirmationSummary = {
     matchId: match.id,
@@ -580,8 +584,9 @@ export async function sendConfirmationForMatch(matchId: string, tenantId?: strin
     // The manual sender opens the event before delivering the approved template.
   }
 
-  summary.invitationsCreated = await ensureInvitations(match)
-  const pendingAttendance = await getPendingAttendance(match.id)
+  summary.invitationsCreated = onlyPlayerId ? 0 : await ensureInvitations(match)
+  const pendingAttendance = (await getPendingAttendance(match.id))
+    .filter((attendance) => !onlyPlayerId || attendance.player_id === onlyPlayerId)
 
   for (const stage of dueStages) {
     const alreadySent = await getAlreadySentPlayerIds(match.id, stage.template)
@@ -642,6 +647,38 @@ export async function sendConfirmationForMatch(matchId: string, tenantId?: strin
   }
 
   return summary
+}
+
+export async function sendConfirmationForNewPlayer(tenantId: string, playerId: string) {
+  const now = new Date()
+  const upperBound = new Date(now.getTime() + 31 * 24 * 60 * 60 * 1000)
+  const { data: matches, error } = await adminSupabase
+    .from('matches')
+    .select('id, tenant_id, status, scheduled_at')
+    .eq('tenant_id', tenantId)
+    .eq('status', 'ABERTA')
+    .gt('scheduled_at', now.toISOString())
+    .lte('scheduled_at', upperBound.toISOString())
+    .order('scheduled_at', { ascending: true })
+
+  if (error) throw error
+  const summaries: MatchConfirmationSummary[] = []
+
+  for (const match of matches ?? []) {
+    const { error: attendanceError } = await adminSupabase.from('attendance').upsert(
+      {
+        tenant_id: tenantId,
+        match_id: match.id,
+        player_id: playerId,
+        status: 'CONVIDADO',
+      },
+      { onConflict: 'match_id,player_id', ignoreDuplicates: true },
+    )
+    if (attendanceError) throw attendanceError
+    summaries.push(await sendConfirmationForMatch(match.id, tenantId, playerId))
+  }
+
+  return summaries
 }
 
 function getErrorMessage(error: unknown, fallback: string) {

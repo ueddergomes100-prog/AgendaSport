@@ -29,12 +29,14 @@ import {
   getMatches,
   getPickups,
   getPlayers,
+  getProfile,
   invitePlayersToMatch,
   savePostMatchStats,
   sendMatchConfirmations,
   updateMatch,
   upsertAttendance,
 } from '../lib/data'
+import { hasModuleAccess } from '../lib/permissions'
 import { displayPosition, isGoalkeeperPosition } from '../lib/positions'
 import { usePrimaryStatLabel } from '../lib/stats-labels'
 import type { Attendance, AttendanceStatus, Match, Pickup } from '../lib/types'
@@ -62,6 +64,7 @@ export function SchedulePage() {
   const matches = useQuery({ queryKey: ['matches'], queryFn: getMatches })
   const pickups = useQuery({ queryKey: ['pickups'], queryFn: getPickups })
   const players = useQuery({ queryKey: ['players'], queryFn: getPlayers })
+  const profile = useQuery({ queryKey: ['profile'], queryFn: getProfile })
   const [selectedMatchId, setSelectedMatchId] = useState('')
   const [savingMatch, setSavingMatch] = useState(false)
   const [savingInvite, setSavingInvite] = useState(false)
@@ -122,8 +125,11 @@ export function SchedulePage() {
   const invitedPlayerIds = new Set(attendanceRows.map((row) => row.player_id))
   const counts = countAttendance(attendanceRows)
   const roleCounts = countRoleAttendance(attendanceRows)
+  const attendanceSections = buildAttendanceSections(attendanceRows)
+  const suspendedPlayers = (players.data ?? []).filter((player) => player.status === 'SUSPENSO')
   const isSelectedMatchClosed = selectedMatch ? ['ENCERRADA', 'CANCELADA'].includes(selectedMatch.status) : false
-  const canLaunchStats = selectedMatch ? canLaunchStatsForMatch(selectedMatch) : false
+  const hasResultsAccess = Boolean(profile.data && hasModuleAccess(profile.data, 'results'))
+  const canLaunchStats = Boolean(hasResultsAccess && selectedMatch && canLaunchStatsForMatch(selectedMatch))
 
   function notify(message: string) {
     setToast(message)
@@ -512,14 +518,18 @@ export function SchedulePage() {
                         <MessageCircle size={16} />
                         WhatsApp
                       </Button>
-                      <Button type="button" variant="secondary" onClick={copyStatsLink}>
-                        <Copy size={16} />
-                        Link lancamento
-                      </Button>
-                      <Button type="button" variant="secondary" onClick={openStatsLink}>
-                        <ExternalLink size={16} />
-                        Abrir sumula
-                      </Button>
+                      {hasResultsAccess && (
+                        <>
+                          <Button type="button" variant="secondary" onClick={copyStatsLink}>
+                            <Copy size={16} />
+                            Link lancamento
+                          </Button>
+                          <Button type="button" variant="secondary" onClick={openStatsLink}>
+                            <ExternalLink size={16} />
+                            Abrir sumula
+                          </Button>
+                        </>
+                      )}
                       <Button type="button" variant="danger" onClick={() => setMatchToDelete(selectedMatch)}>
                         <Trash2 size={16} />
                         Excluir data
@@ -548,30 +558,52 @@ export function SchedulePage() {
                     Atualizar respostas
                   </Button>
                 </div>
-                <div className="mt-4 grid gap-2">
-                  {attendanceRows.map((item) => (
-                    <div key={item.id} className="grid gap-3 rounded-lg border border-border bg-white/70 p-3 dark:bg-slate-950/40 lg:grid-cols-[1fr_auto] lg:items-center">
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="font-black">{item.player?.name ?? 'Participante'}</p>
-                          <StatusPill status={item.status} />
-                          {item.queue_position ? <span className="rounded-md bg-yellow-100 px-2 py-1 text-xs font-black text-yellow-900">Fila #{item.queue_position}</span> : null}
-                        </div>
-                        <p className="mt-1 text-xs text-muted-foreground">{displayPosition(item.player?.primary_position)} - {item.player?.whatsapp ?? 'Sem WhatsApp'}</p>
+                <div className="mt-4 grid gap-4">
+                  {attendanceSections.map((section) => (
+                    <section key={section.key} className="grid gap-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <h3 className="text-sm font-black uppercase text-muted-foreground">{section.label}</h3>
+                        <span className="rounded-full bg-muted px-2.5 py-1 text-xs font-black">{section.rows.length}</span>
                       </div>
-                      <div className="grid gap-2">
-                        <ResponseHint status={item.status} />
-                        {selectedMatch.status !== 'ENCERRADA' && selectedMatch.status !== 'CANCELADA' && (
-                          <div className="flex flex-wrap justify-end gap-2">
-                            <Button type="button" variant="secondary" className="h-9 px-3" onClick={() => setManualResponse(item, 'CONFIRMADO')}>Sim</Button>
-                            <Button type="button" variant="secondary" className="h-9 px-3" onClick={() => setManualResponse(item, 'RECUSOU')}>Nao</Button>
-                            <Button type="button" variant="secondary" className="h-9 px-3" onClick={() => setManualResponse(item, 'ESPERA')}>Espera</Button>
-                            <Button type="button" variant="ghost" className="h-9 px-3" onClick={() => setManualResponse(item, 'CONVIDADO')}>Aguardando</Button>
+                      {section.rows.map((item) => (
+                        <div key={item.id} className="grid gap-3 rounded-lg border border-border bg-white/70 p-3 dark:bg-slate-950/40 lg:grid-cols-[1fr_auto] lg:items-center">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="font-black">{item.player?.name ?? 'Participante'}</p>
+                              <StatusPill status={item.status} />
+                              {item.queue_position ? <span className="rounded-md bg-yellow-100 px-2 py-1 text-xs font-black text-yellow-900">Fila #{item.queue_position}</span> : null}
+                            </div>
+                            <p className="mt-1 text-xs text-muted-foreground">{displayPosition(item.player?.primary_position)} - {item.player?.whatsapp ?? 'Sem WhatsApp'}</p>
                           </div>
-                        )}
-                      </div>
-                    </div>
+                          <div className="grid gap-2">
+                            <ResponseHint status={item.status} />
+                            {selectedMatch.status !== 'ENCERRADA' && selectedMatch.status !== 'CANCELADA' && (
+                              <div className="flex flex-wrap justify-end gap-2">
+                                <Button type="button" variant="secondary" className="h-9 px-3" onClick={() => setManualResponse(item, 'CONFIRMADO')}>Sim</Button>
+                                <Button type="button" variant="secondary" className="h-9 px-3" onClick={() => setManualResponse(item, 'RECUSOU')}>Nao</Button>
+                                <Button type="button" variant="secondary" className="h-9 px-3" onClick={() => setManualResponse(item, 'ESPERA')}>Espera</Button>
+                                <Button type="button" variant="ghost" className="h-9 px-3" onClick={() => setManualResponse(item, 'CONVIDADO')}>Aguardando</Button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </section>
                   ))}
+                  {suspendedPlayers.length > 0 && (
+                    <section className="grid gap-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <h3 className="text-sm font-black uppercase text-red-700">Suspensos</h3>
+                        <span className="rounded-full bg-red-100 px-2.5 py-1 text-xs font-black text-red-800">{suspendedPlayers.length}</span>
+                      </div>
+                      {suspendedPlayers.map((player) => (
+                        <div key={player.id} className="rounded-lg border border-red-200 bg-red-50/70 p-3 dark:border-red-900/50 dark:bg-red-950/20">
+                          <p className="font-black">{player.name}</p>
+                          <p className="mt-1 text-xs text-red-800 dark:text-red-200">{player.suspension_reason || 'Convocacao bloqueada ate regularizacao.'}</p>
+                        </div>
+                      ))}
+                    </section>
+                  )}
                   {!attendanceRows.length && (
                     <p className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
                       Nenhuma convocacao enviada. Clique em Enviar WhatsApp para chamar os participantes ativos.
@@ -580,7 +612,7 @@ export function SchedulePage() {
                 </div>
               </Card>
 
-              <Card>
+              {hasResultsAccess && <Card>
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <CardTitle>Lancamento individual</CardTitle>
@@ -658,7 +690,7 @@ export function SchedulePage() {
                     {savingStats ? 'Finalizando...' : 'Finalizar evento e calcular estatisticas'}
                   </Button>
                 </form>
-              </Card>
+              </Card>}
             </>
           )}
         </section>
@@ -765,6 +797,39 @@ function countRoleAttendance(rows: Attendance[]) {
     },
     { lineConfirmed: 0, goalkeeperConfirmed: 0 },
   )
+}
+
+function buildAttendanceSections(rows: Attendance[]) {
+  const confirmed = (row: Attendance) => ['CONFIRMADO', 'COMPARECEU'].includes(row.status)
+  const sections = [
+    {
+      key: 'goalkeepers',
+      label: 'Goleiros confirmados',
+      rows: rows.filter((row) => confirmed(row) && isGoalkeeperPosition(row.player?.primary_position)),
+    },
+    {
+      key: 'line',
+      label: 'Jogadores de linha confirmados',
+      rows: rows.filter((row) => confirmed(row) && !isGoalkeeperPosition(row.player?.primary_position)),
+    },
+    {
+      key: 'waitlist',
+      label: 'Lista de espera',
+      rows: rows.filter((row) => row.status === 'ESPERA'),
+    },
+    {
+      key: 'pending',
+      label: 'Aguardando resposta',
+      rows: rows.filter((row) => row.status === 'CONVIDADO'),
+    },
+    {
+      key: 'declined',
+      label: 'Recusados e ausentes',
+      rows: rows.filter((row) => ['RECUSOU', 'FALTOU'].includes(row.status)),
+    },
+  ]
+
+  return sections.filter((section) => section.rows.length)
 }
 
 function ResponseHint({ status }: { status: AttendanceStatus }) {

@@ -18,7 +18,15 @@ export type Profile = {
   permissions?: TeamPermissions | null
 }
 
-export type PermissionKey = 'confirmations' | 'stats' | 'finance' | 'settings'
+export type PermissionKey =
+  | 'confirmations'
+  | 'players'
+  | 'draw'
+  | 'stats'
+  | 'results'
+  | 'finance'
+  | 'settings'
+  | 'suspensions'
 
 export type TeamPermissions = Partial<Record<PermissionKey, boolean>>
 
@@ -94,6 +102,7 @@ export type Match = {
   team_a_score: number | null
   team_b_score: number | null
   team_results: MatchTeamResult[] | null
+  game_results: MatchGameResult[] | null
   notes: string | null
   status: 'AGENDADA' | 'ABERTA' | 'ENCERRADA' | 'CANCELADA'
   max_line_players: number | null
@@ -148,6 +157,14 @@ export type MatchTeamResult = {
   playerIds: string[]
 }
 
+export type MatchGameResult = {
+  id: string
+  homeTeamId: string
+  awayTeamId: string
+  homeScore: number
+  awayScore: number
+}
+
 export type DashboardStats = {
   next_match: string | null
   confirmed: number
@@ -172,7 +189,7 @@ export type PlayerStatRow = {
   present: boolean
   created_at: string
   player?: Pick<Player, 'id' | 'name' | 'primary_position' | 'photo_url'>
-  match?: Pick<Match, 'id' | 'scheduled_at' | 'team_a_name' | 'team_b_name' | 'team_results' | 'notes'>
+  match?: Pick<Match, 'id' | 'scheduled_at' | 'team_a_name' | 'team_b_name' | 'team_results' | 'game_results' | 'notes'>
 }
 
 export type CompletedMatchSheet = {
@@ -209,8 +226,11 @@ export type FinanceTransaction = {
   amount: number
   occurred_on: string
   status: FinanceTransactionStatus
+  payment_method: string
+  created_by: string | null
   created_at: string
   player?: Pick<Player, 'id' | 'name'>
+  responsible?: { full_name: string } | null
 }
 
 export type ConfirmationSchedule = {
@@ -229,6 +249,17 @@ export type BillingSettings = {
   monthly_billing_day: number
   default_provider: 'MANUAL_PIX' | 'ASAAS' | 'MERCADO_PAGO' | 'STONE' | 'VINDI'
   auto_charge_casual_players: boolean
+  auto_suspend_overdue: boolean
+  overdue_grace_days: number
+  created_at: string
+  updated_at: string
+}
+
+export type CompanyIntegration = {
+  id: string
+  tenant_id: string
+  whatsapp_group_enabled: boolean
+  whatsapp_group_id: string | null
   created_at: string
   updated_at: string
 }

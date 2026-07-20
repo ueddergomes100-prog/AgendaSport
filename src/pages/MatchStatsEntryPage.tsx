@@ -1,9 +1,10 @@
 import { useMemo, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowLeft, CheckCircle2, ClipboardList, LoaderCircle, Save, Users } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, ClipboardList, LoaderCircle, Plus, Save, Trash2, Trophy, Users } from 'lucide-react'
 import { Button } from '../components/ui/button'
 import { Card, CardTitle } from '../components/ui/card'
+import { Select } from '../components/ui/field'
 import { NumberStepper } from '../components/ui/number-stepper'
 import { AnimatedPage, ConfirmDialog } from '../components/ui/sport'
 import {
@@ -14,11 +15,12 @@ import {
   getMatches,
   getPickups,
   savePostMatchStats,
+  shareMatchWithConfiguredGroup,
   upsertAttendance,
 } from '../lib/data'
 import { displayPosition } from '../lib/positions'
 import { usePrimaryStatLabel } from '../lib/stats-labels'
-import type { Attendance, Match } from '../lib/types'
+import type { Attendance, Match, MatchGameResult, MatchTeamResult } from '../lib/types'
 import { compareTextPtBr, getErrorMessage } from '../lib/utils'
 
 export function MatchStatsEntryPage() {
@@ -34,6 +36,7 @@ export function MatchStatsEntryPage() {
   const [feedback, setFeedback] = useState('')
   const [toast, setToast] = useState('')
   const [confirmFinish, setConfirmFinish] = useState(false)
+  const [gameDraft, setGameDraft] = useState<{ matchId: string; results: MatchGameResult[] } | null>(null)
   const formRef = useRef<HTMLFormElement>(null)
   const { labels: primaryStatLabels } = usePrimaryStatLabel()
 
@@ -41,6 +44,12 @@ export function MatchStatsEntryPage() {
   const selectedPickup = useMemo(() => (pickups.data ?? []).find((pickup) => pickup.id === selectedMatch?.pickup_id) ?? null, [pickups.data, selectedMatch])
   const statsByPlayerId = useMemo(() => new Map((matchStats.data ?? []).map((row) => [row.player_id, row] as const)), [matchStats.data])
   const drawTeams = useMemo(() => latestTeamDraw.data?.payload?.teams ?? [], [latestTeamDraw.data])
+  const initialGameResults = useMemo(() => {
+    if (selectedMatch?.game_results?.length) return selectedMatch.game_results
+    if (drawTeams.length >= 2) return [createGameResult(drawTeams[0].id, drawTeams[1].id)]
+    return []
+  }, [selectedMatch, drawTeams])
+  const gameResults = gameDraft?.matchId === matchId ? gameDraft.results : initialGameResults
   const rows = useMemo(
     () => (attendance.data ?? [])
       .filter((row) => ['CONFIRMADO', 'COMPARECEU', 'FALTOU'].includes(row.status) && row.player)
@@ -77,37 +86,61 @@ export function MatchStatsEntryPage() {
     }
   }
 
-  function buildTeamResultsFromForm(form: HTMLFormElement | null) {
+  function buildTeamResults(): MatchTeamResult[] {
     return drawTeams.map((team) => ({
       id: team.id,
       name: team.name,
-      score: Number(form?.querySelector<HTMLInputElement>(`[name="team-score-${team.id}"]`)?.value || 0),
+      score: gameResults.filter((game) => getGameWinnerId(game) === team.id).length,
       playerIds: team.players.map((player) => player.id),
     }))
   }
 
-  function applyTeamResultsToRows<T extends { playerId: string; present: boolean; wins?: number; draws?: number; losses?: number }>(statRows: T[], teamResults: ReturnType<typeof buildTeamResultsFromForm>) {
-    if (!teamResults.length) return statRows.map((row) => ({ ...row, wins: 0, draws: 0, losses: 0 }))
-
-    const highestScore = Math.max(...teamResults.map((team) => team.score))
-    const winnerCount = teamResults.filter((team) => team.score === highestScore).length
-
+  function applyGameResultsToRows<T extends { playerId: string; present: boolean; wins?: number; draws?: number; losses?: number }>(statRows: T[]) {
     return statRows.map((row) => {
-      const team = teamResults.find((teamResult) => teamResult.playerIds.includes(row.playerId))
+      const team = drawTeams.find((teamResult) => teamResult.players.some((player) => player.id === row.playerId))
       if (!row.present || !team) return { ...row, wins: 0, draws: 0, losses: 0 }
-      if (winnerCount !== 1) return { ...row, wins: 0, draws: 1, losses: 0 }
+      let wins = 0
+      let draws = 0
+      let losses = 0
+      gameResults.forEach((game) => {
+        if (![game.homeTeamId, game.awayTeamId].includes(team.id)) return
+        const winnerId = getGameWinnerId(game)
+        if (!winnerId) draws += 1
+        else if (winnerId === team.id) wins += 1
+        else losses += 1
+      })
       return {
         ...row,
-        wins: team.score === highestScore ? 1 : 0,
-        draws: 0,
-        losses: team.score === highestScore ? 0 : 1,
+        wins,
+        draws,
+        losses,
       }
+    })
+  }
+
+  function addGame() {
+    if (drawTeams.length < 2) return
+    updateGameResults((current) => [
+      ...current,
+      createGameResult(drawTeams[0].id, drawTeams[1].id),
+    ])
+  }
+
+  function updateGame(gameId: string, patch: Partial<MatchGameResult>) {
+    updateGameResults((current) => current.map((game) => (game.id === gameId ? { ...game, ...patch } : game)))
+  }
+
+  function updateGameResults(updater: (current: MatchGameResult[]) => MatchGameResult[]) {
+    setGameDraft({
+      matchId,
+      results: updater(gameDraft?.matchId === matchId ? gameDraft.results : initialGameResults),
     })
   }
 
   async function savePartialRow(item: Attendance, override: Partial<{ present: boolean; goals: number; assists: number }> = {}) {
     if (!selectedMatch || !canLaunchStats) return
     const row = buildRowFromForm(item, override)
+    const saved = statsByPlayerId.get(item.player_id)
     setSavingPartialId(item.player_id)
     setFeedback('')
     try {
@@ -123,9 +156,15 @@ export function MatchStatsEntryPage() {
             score: 0,
             playerIds: team.players.map((player) => player.id),
           })) ?? [],
+          game_results: selectedMatch.game_results ?? [],
           status: selectedMatch.status,
         },
-        [row],
+        [{
+          ...row,
+          wins: saved?.wins ?? 0,
+          draws: saved?.draws ?? 0,
+          losses: saved?.losses ?? 0,
+        }],
       )
       await Promise.all([attendance.refetch(), matchStats.refetch()])
       notify('Atualizado com sucesso.')
@@ -148,10 +187,15 @@ export function MatchStatsEntryPage() {
 
   async function finishMatch() {
     if (!selectedMatch || !formRef.current) return
+    if (gameResults.some((game) => game.homeTeamId === game.awayTeamId)) {
+      setFeedback('Cada partida precisa ter duas equipes diferentes.')
+      setConfirmFinish(false)
+      return
+    }
 
     const form = new FormData(formRef.current)
-    const teamResults = buildTeamResultsFromForm(formRef.current)
-    const statRows = applyTeamResultsToRows(rows.map((item) => ({
+    const teamResults = buildTeamResults()
+    const statRows = applyGameResultsToRows(rows.map((item) => ({
       playerId: item.player_id,
       present: form.get(`present-${item.player_id}`) === 'on',
       goals: Number(form.get(`goals-${item.player_id}`) || 0),
@@ -159,7 +203,7 @@ export function MatchStatsEntryPage() {
       wins: 0,
       draws: 0,
       losses: 0,
-    })), teamResults)
+    })))
 
     setSaving(true)
     setFeedback('')
@@ -171,10 +215,23 @@ export function MatchStatsEntryPage() {
           team_a_score: null,
           team_b_score: null,
           team_results: teamResults,
+          game_results: gameResults,
           status: 'ENCERRADA',
         },
         statRows,
       )
+
+      let groupNotice = ''
+      try {
+        const groupResult = await shareMatchWithConfiguredGroup(
+          selectedMatch.id,
+          'REPORT',
+          buildFinishedMatchMessage(selectedPickup?.name ?? selectedMatch.notes ?? 'Evento esportivo', gameResults, teamResults, statRows, rows),
+        )
+        if (groupResult.status !== 'SKIPPED_NOT_CONFIGURED') groupNotice = ' Resumo enviado ao grupo configurado.'
+      } catch (groupError) {
+        groupNotice = ` O evento foi encerrado, mas o grupo nao recebeu o resumo: ${getErrorMessage(groupError, 'verifique a integracao.')}`
+      }
 
       let nextMatch: Match | null = null
       const nextDate = getNextRecurringDate(selectedMatch, selectedPickup)
@@ -202,7 +259,7 @@ export function MatchStatsEntryPage() {
       }
 
       await Promise.all([matches.refetch(), attendance.refetch(), matchStats.refetch()])
-      setFeedback(nextMatch ? 'Estatisticas salvas e proximo evento agendado.' : 'Estatisticas salvas com sucesso.')
+      setFeedback(`${nextMatch ? 'Estatisticas salvas e proximo evento agendado.' : 'Estatisticas salvas com sucesso.'}${groupNotice}`)
       if (nextMatch) navigate(`/lancamento/${nextMatch.id}`)
     } catch (error) {
       setFeedback(getErrorMessage(error, 'Nao foi possivel salvar as estatisticas.'))
@@ -288,21 +345,64 @@ export function MatchStatsEntryPage() {
             <div className="rounded-xl border border-green-200 bg-green-50/70 p-3 dark:border-green-900/50 dark:bg-green-950/20 sm:p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <h3 className="font-black text-green-950 dark:text-green-100">Resultado das equipes</h3>
-                  <p className="mt-1 text-sm text-green-900/70 dark:text-green-100/70">Informe o placar antes de finalizar para calcular vitorias, empates e derrotas.</p>
+                  <h3 className="font-black text-green-950 dark:text-green-100">Partidas entre as equipes</h3>
+                  <p className="mt-1 text-sm text-green-900/70 dark:text-green-100/70">Registre cada confronto. As vitorias, empates e derrotas serao calculados automaticamente.</p>
                 </div>
-                <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-green-900 shadow-sm dark:bg-slate-950 dark:text-green-100">{drawTeams.length} equipes</span>
+                <Button type="button" variant="secondary" className="h-10" onClick={addGame} disabled={!canLaunchStats || saving || drawTeams.length < 2}>
+                  <Plus size={16} />
+                  Adicionar partida
+                </Button>
               </div>
-              <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                {drawTeams.map((team) => (
-                  <NumberStepper
-                    key={team.id}
-                    name={`team-score-${team.id}`}
-                    label={team.name}
-                    defaultValue={selectedMatch.team_results?.find((result) => result.id === team.id)?.score ?? 0}
-                    disabled={!canLaunchStats || saving}
-                  />
+              <div className="mt-3 grid gap-3">
+                {gameResults.map((game, index) => (
+                  <div key={game.id} className="grid gap-3 rounded-xl border border-green-200 bg-white p-3 dark:border-green-900/50 dark:bg-slate-950/60 lg:grid-cols-[minmax(0,1fr)_140px_auto_140px_minmax(0,1fr)_44px] lg:items-end">
+                    <label className="grid gap-1.5 text-sm font-black">
+                      Equipe 1
+                      <Select value={game.homeTeamId} onChange={(event) => updateGame(game.id, { homeTeamId: event.target.value })} disabled={!canLaunchStats || saving}>
+                        {drawTeams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
+                      </Select>
+                    </label>
+                    <NumberStepper
+                      key={`${game.id}-home-${game.homeScore}`}
+                      name={`game-home-${game.id}`}
+                      label="Gols"
+                      defaultValue={game.homeScore}
+                      disabled={!canLaunchStats || saving}
+                      onValueChange={(value) => updateGame(game.id, { homeScore: value })}
+                    />
+                    <span className="pb-4 text-center text-sm font-black text-green-900 dark:text-green-100">x</span>
+                    <NumberStepper
+                      key={`${game.id}-away-${game.awayScore}`}
+                      name={`game-away-${game.id}`}
+                      label="Gols"
+                      defaultValue={game.awayScore}
+                      disabled={!canLaunchStats || saving}
+                      onValueChange={(value) => updateGame(game.id, { awayScore: value })}
+                    />
+                    <label className="grid gap-1.5 text-sm font-black">
+                      Equipe 2
+                      <Select value={game.awayTeamId} onChange={(event) => updateGame(game.id, { awayTeamId: event.target.value })} disabled={!canLaunchStats || saving}>
+                        {drawTeams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
+                      </Select>
+                    </label>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="size-11 p-0 text-red-700"
+                      title={`Remover partida ${index + 1}`}
+                      onClick={() => updateGameResults((current) => current.filter((item) => item.id !== game.id))}
+                      disabled={!canLaunchStats || saving}
+                    >
+                      <Trash2 size={17} />
+                    </Button>
+                  </div>
                 ))}
+                {!gameResults.length && (
+                  <button type="button" onClick={addGame} className="rounded-xl border border-dashed border-green-300 p-5 text-sm font-black text-green-900 dark:border-green-800 dark:text-green-100">
+                    <Trophy className="mx-auto mb-2" size={22} />
+                    Adicione a primeira partida da rodada
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -382,6 +482,53 @@ function Summary({ icon, label, value }: { icon: React.ReactNode; label: string;
       </div>
     </div>
   )
+}
+
+function createGameResult(homeTeamId: string, awayTeamId: string): MatchGameResult {
+  return {
+    id: globalThis.crypto?.randomUUID?.() ?? `game-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    homeTeamId,
+    awayTeamId,
+    homeScore: 0,
+    awayScore: 0,
+  }
+}
+
+function getGameWinnerId(game: MatchGameResult) {
+  if (game.homeScore === game.awayScore) return null
+  return game.homeScore > game.awayScore ? game.homeTeamId : game.awayTeamId
+}
+
+function buildFinishedMatchMessage(
+  eventName: string,
+  games: MatchGameResult[],
+  teams: MatchTeamResult[],
+  stats: Array<{ playerId: string; present: boolean; goals: number; assists: number }>,
+  attendanceRows: Attendance[],
+) {
+  const names = new Map(attendanceRows.map((row) => [row.player_id, row.player?.name ?? 'Participante']))
+  const ranking = stats
+    .filter((row) => row.present)
+    .sort((left, right) => right.goals - left.goals || right.assists - left.assists || (names.get(left.playerId) ?? '').localeCompare(names.get(right.playerId) ?? '', 'pt-BR'))
+  const champion = teams.length
+    ? teams.filter((team) => team.score === Math.max(...teams.map((item) => item.score)))
+    : []
+
+  return [
+    `Agenda Sport - sumula finalizada`,
+    eventName,
+    '',
+    games.length ? 'Resultados:' : null,
+    ...games.map((game, index) => {
+      const home = teams.find((team) => team.id === game.homeTeamId)?.name ?? 'Equipe 1'
+      const away = teams.find((team) => team.id === game.awayTeamId)?.name ?? 'Equipe 2'
+      return `${index + 1}. ${home} ${game.homeScore} x ${game.awayScore} ${away}`
+    }),
+    champion.length === 1 ? `Campeao: ${champion[0].name}` : null,
+    '',
+    'Artilharia:',
+    ...ranking.slice(0, 10).map((row, index) => `${index + 1}. ${names.get(row.playerId)} - ${row.goals} gols, ${row.assists} assist.`),
+  ].filter(Boolean).join('\n')
 }
 
 function formatDateTime(value: string) {

@@ -5,7 +5,7 @@ import { Button } from '../components/ui/button'
 import { Card, CardTitle } from '../components/ui/card'
 import { Field, Input, Select } from '../components/ui/field'
 import { AnimatedPage } from '../components/ui/sport'
-import { getAttendance, getMatches, saveTeamDraw } from '../lib/data'
+import { getAttendance, getMatches, saveTeamDraw, shareMatchWithConfiguredGroup } from '../lib/data'
 import { displayPosition, isGoalkeeperPosition } from '../lib/positions'
 import { buildBalancedTeams } from '../lib/team-draw'
 import type { TeamDraw, TeamDrawPlayer, TeamDrawTeam } from '../lib/types'
@@ -62,7 +62,16 @@ export function DrawPage() {
     setFeedback('')
     try {
       await saveTeamDraw(effectiveMatchId, draw)
-      setFeedback('Sorteio salvo com sucesso.')
+      try {
+        const groupResult = await shareMatchWithConfiguredGroup(effectiveMatchId, 'DRAW', buildDrawMessage(draw, selectedMatch))
+        setFeedback(
+          groupResult.status === 'SKIPPED_NOT_CONFIGURED'
+            ? 'Sorteio salvo. Configure o grupo oficial em Configuracoes para o envio automatico.'
+            : 'Sorteio salvo e enviado ao grupo configurado.',
+        )
+      } catch (shareError) {
+        setFeedback(`Sorteio salvo, mas o grupo nao recebeu a lista: ${getErrorMessage(shareError, 'verifique a integracao.')}`)
+      }
     } catch (error) {
       setFeedback(getErrorMessage(error, 'Nao foi possivel salvar o sorteio.'))
     } finally {

@@ -4,6 +4,7 @@ import type {
   Attendance,
   BillingSettings,
   Company,
+  CompanyIntegration,
   CompletedMatchSheet,
   ConfirmationSchedule,
   DashboardStats,
@@ -161,14 +162,14 @@ export async function getMatchPlayerStats(matchId: string): Promise<PlayerStatRo
 async function selectPlayerStats(matchId?: string): Promise<PlayerStatRow[]> {
   let query = supabase
     .from('match_player_stats')
-    .select('*, player:players(id, name, primary_position, photo_url), match:matches(id, scheduled_at, team_a_name, team_b_name, team_results, notes)')
+    .select('*, player:players(id, name, primary_position, photo_url), match:matches(id, scheduled_at, team_a_name, team_b_name, team_results, game_results, notes)')
     .order('created_at', { ascending: false })
 
   if (matchId) query = query.eq('match_id', matchId)
 
   const { data, error } = await query
   if (!error) return data ?? []
-  if (!isMissingColumnError(error.message, 'team_results')) throw error
+  if (!isMissingColumnError(error.message, 'team_results') && !isMissingColumnError(error.message, 'game_results')) throw error
 
   let legacyQuery = supabase
     .from('match_player_stats')
@@ -181,7 +182,7 @@ async function selectPlayerStats(matchId?: string): Promise<PlayerStatRow[]> {
   if (legacyError) throw legacyError
   return (legacyData ?? []).map((row) => ({
     ...row,
-    match: row.match ? { ...row.match, team_results: null } : row.match,
+    match: row.match ? { ...row.match, team_results: null, game_results: null } : row.match,
   })) as PlayerStatRow[]
 }
 
@@ -208,6 +209,7 @@ function createStatsRowFromAttendance(
       team_a_name: match.team_a_name,
       team_b_name: match.team_b_name,
       team_results: match.team_results ?? null,
+      game_results: match.game_results ?? null,
       notes: match.notes,
     },
   }
@@ -266,16 +268,37 @@ export async function getPayments(): Promise<Payment[]> {
 }
 
 export async function createPayment(input: Partial<Payment>) {
-  const profile = await requireTenantProfile()
-  const payload = { ...input, tenant_id: profile.tenant_id }
-  const { data, error } = await supabase.from('payments').insert(payload).select().single()
-  if (error) throw error
-  return data as Payment
+  const { data: session } = await supabase.auth.getSession()
+  const token = session.session?.access_token
+  if (!token) throw new Error('Sessao expirada. Faca login novamente.')
+  const response = await fetch(apiUrl('/api/payments'), {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(input),
+  })
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(payload.error ?? 'Nao foi possivel cadastrar a cobranca.')
+  return payload as Payment
 }
 
 export async function updatePayment(id: string, input: Partial<Payment>) {
-  const { error } = await supabase.from('payments').update(input).eq('id', id)
-  if (error) throw error
+  const { data: session } = await supabase.auth.getSession()
+  const token = session.session?.access_token
+  if (!token) throw new Error('Sessao expirada. Faca login novamente.')
+  const response = await fetch(apiUrl(`/api/payments/${id}`), {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(input),
+  })
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(payload.error ?? 'Nao foi possivel atualizar a cobranca.')
+  return payload as Payment
 }
 
 export async function getFinanceTransactions(): Promise<FinanceTransaction[]> {
@@ -382,7 +405,10 @@ export async function getBillingSettings(): Promise<BillingSettings | null> {
   return data as BillingSettings | null
 }
 
-export async function saveBillingSettings(input: Pick<BillingSettings, 'monthly_billing_day' | 'default_provider' | 'auto_charge_casual_players'>) {
+export async function saveBillingSettings(input: Pick<
+  BillingSettings,
+  'monthly_billing_day' | 'default_provider' | 'auto_charge_casual_players' | 'auto_suspend_overdue' | 'overdue_grace_days'
+>) {
   const profile = await requireTenantProfile()
   const { data, error } = await supabase
     .from('billing_settings')
@@ -391,6 +417,38 @@ export async function saveBillingSettings(input: Pick<BillingSettings, 'monthly_
     .single()
   if (error) throw error
   return data as BillingSettings
+}
+
+export async function getCompanyIntegration(): Promise<CompanyIntegration | null> {
+  const profile = await requireTenantProfile()
+  const { data, error } = await supabase
+    .from('company_integrations')
+    .select('*')
+    .eq('tenant_id', profile.tenant_id)
+    .maybeSingle()
+  if (error && isMissingRelationError(error.message, 'company_integrations')) return null
+  if (error) throw error
+  return data as CompanyIntegration | null
+}
+
+export async function saveCompanyIntegration(
+  input: Pick<CompanyIntegration, 'whatsapp_group_enabled' | 'whatsapp_group_id'>,
+) {
+  const profile = await requireTenantProfile()
+  const { data, error } = await supabase
+    .from('company_integrations')
+    .upsert({
+      ...input,
+      tenant_id: profile.tenant_id,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'tenant_id' })
+    .select()
+    .single()
+  if (error && isMissingRelationError(error.message, 'company_integrations')) {
+    throw new Error('A configuracao de grupo ainda nao existe no Supabase. Rode o patch SQL mais recente.')
+  }
+  if (error) throw error
+  return data as CompanyIntegration
 }
 
 export async function runMonthlyBilling(): Promise<{ created: number; skipped: number; amount: number; due_date: string }> {
@@ -420,66 +478,44 @@ export async function saveTeamDraw(matchId: string, payload: unknown) {
   if (error) throw error
 }
 
-export async function upsertAttendance(matchId: string, playerId: string, status: Attendance['status']) {
-  if (status === 'ESPERA') {
-    await upsertWaitlistAttendance(matchId, playerId)
-    return
-  }
+export async function shareMatchWithConfiguredGroup(
+  matchId: string,
+  kind: 'DRAW' | 'LIST' | 'REPORT',
+  message: string,
+) {
+  const { data: session } = await supabase.auth.getSession()
+  const token = session.session?.access_token
+  if (!token) throw new Error('Sessao expirada. Faca login novamente.')
 
-  const { error } = await supabase.rpc('set_attendance_response', {
-    p_match_id: matchId,
-    p_player_id: playerId,
-    p_status: status,
-    p_source: 'MANUAL',
+  const response = await fetch(apiUrl(`/api/matches/${matchId}/group/share`), {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ kind, message }),
   })
-  if (error && error.message.includes('Could not find the function')) {
-    const { error: legacyError } = await supabase.rpc('set_attendance_response', {
-      p_match_id: matchId,
-      p_player_id: playerId,
-      p_status: status,
-    })
-    if (legacyError) throw legacyError
-    return
-  }
-  if (error) throw error
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(payload.error ?? 'Nao foi possivel compartilhar no grupo.')
+  return payload as { status?: string }
 }
 
-async function upsertWaitlistAttendance(matchId: string, playerId: string) {
-  const tenantId = await getMatchTenantId(matchId)
-  const { data: current, error: currentError } = await supabase
-    .from('attendance')
-    .select('status')
-    .eq('match_id', matchId)
-    .eq('player_id', playerId)
-    .maybeSingle()
-  if (currentError) throw currentError
+export async function upsertAttendance(matchId: string, playerId: string, status: Attendance['status']) {
+  const { data: session } = await supabase.auth.getSession()
+  const token = session.session?.access_token
+  if (!token) throw new Error('Sessao expirada. Faca login novamente.')
 
-  const { data: queued, error: queueError } = await supabase
-    .from('attendance')
-    .select('queue_position')
-    .eq('match_id', matchId)
-    .eq('status', 'ESPERA')
-    .order('queue_position', { ascending: false, nullsFirst: false })
-    .limit(1)
-  if (queueError) throw queueError
-
-  const nextQueuePosition = Number(queued?.[0]?.queue_position ?? 0) + 1
-  const { error } = await supabase.from('attendance').upsert(
-    {
-      tenant_id: tenantId,
-      match_id: matchId,
-      player_id: playerId,
-      status: 'ESPERA',
-      responded_at: new Date().toISOString(),
-      queue_position: nextQueuePosition,
+  const response = await fetch(apiUrl(`/api/matches/${matchId}/attendance/${playerId}`), {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
     },
-    { onConflict: 'match_id,player_id' },
-  )
-  if (error) throw error
-
-  if (['CONFIRMADO', 'COMPARECEU'].includes(current?.status ?? '')) {
-    await supabase.rpc('promote_waitlist', { p_match_id: matchId })
-  }
+    body: JSON.stringify({ status }),
+  })
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(payload.error ?? 'Nao foi possivel atualizar a resposta.')
+  return payload as Attendance
 }
 
 export async function invitePlayersToMatch(matchId: string, playerIds: string[]) {
@@ -667,7 +703,10 @@ export async function updateMatch(id: string, input: Partial<Match>) {
 
 export async function savePostMatchStats(
   matchId: string,
-  matchInput: Pick<Match, 'team_a_score' | 'team_b_score' | 'status'> & { team_results?: MatchTeamResult[] },
+  matchInput: Pick<Match, 'team_a_score' | 'team_b_score' | 'status'> & {
+    team_results?: MatchTeamResult[]
+    game_results?: Match['game_results']
+  },
   rows: Array<{ playerId: string; goals: number; assists: number; present: boolean; wins?: number; draws?: number; losses?: number }>,
 ) {
   const tenantId = await getMatchTenantId(matchId)
@@ -675,9 +714,10 @@ export async function savePostMatchStats(
   const { error: matchError } = await supabase.from('matches').update(matchInput).eq('id', matchId)
   if (matchError) {
     const message = matchError.message ?? ''
-    if (message.includes('team_results')) {
+    if (message.includes('team_results') || message.includes('game_results')) {
       const legacyMatchInput = { ...matchInput }
       delete legacyMatchInput.team_results
+      delete legacyMatchInput.game_results
       const { error: legacyMatchError } = await supabase.from('matches').update(legacyMatchInput).eq('id', matchId)
       if (legacyMatchError) throw legacyMatchError
     } else {

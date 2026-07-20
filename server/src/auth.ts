@@ -2,12 +2,6 @@ import type { NextFunction, Request, Response } from 'express'
 import { anonSupabase } from './supabase.js'
 import { adminSupabase } from './supabase.js'
 
-declare module 'express-serve-static-core' {
-  interface Request {
-    user?: { id: string; tenant_id: string | null; role: string; permissions?: Record<string, boolean> | null }
-  }
-}
-
 export async function requireAuth(req: Request, res: Response, next: NextFunction) {
   const token = req.headers.authorization?.replace('Bearer ', '')
   if (!token) return res.status(401).json({ error: 'Token ausente.' })

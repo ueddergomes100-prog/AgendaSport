@@ -20,13 +20,13 @@ import {
   Zap,
   type LucideIcon,
 } from 'lucide-react'
-import { hasModuleAccess } from '../../lib/permissions'
+import { hasAnyModuleAccess, hasModuleAccess } from '../../lib/permissions'
 import { supabase } from '../../lib/supabase'
 import type { PermissionKey, Profile } from '../../lib/types'
 import { Button } from '../ui/button'
 import { ParticleBackground } from './ParticleBackground'
 
-type ShellNavItem = { to: string; label: string; icon: LucideIcon; permission?: PermissionKey }
+type ShellNavItem = { to: string; label: string; icon: LucideIcon; permission?: PermissionKey; anyPermission?: PermissionKey[] }
 type ShellNavGroup = { label: string; items: ShellNavItem[] }
 
 const superAdminGroups: ShellNavGroup[] = [
@@ -44,10 +44,10 @@ const tenantGroups: ShellNavGroup[] = [
     label: 'Operacao',
     items: [
       { to: '/', label: 'Dashboard', icon: ChartNoAxesCombined },
-      { to: '/participantes', label: 'Participantes', icon: Users, permission: 'confirmations' },
+      { to: '/participantes', label: 'Participantes', icon: Users, anyPermission: ['players', 'suspensions'] },
       { to: '/eventos', label: 'Eventos', icon: Dumbbell, permission: 'confirmations' },
       { to: '/agenda', label: 'Agenda', icon: CalendarDays, permission: 'confirmations' },
-      { to: '/sorteio', label: 'Sorteio', icon: Trophy, permission: 'stats' },
+      { to: '/sorteio', label: 'Sorteio', icon: Trophy, permission: 'draw' },
       { to: '/estatisticas', label: 'Estatisticas', icon: BarChart3, permission: 'stats' },
     ],
   },
@@ -66,7 +66,13 @@ export function AppShell({ profile, darkMode, setDarkMode }: { profile: Profile;
   const groups = profile.role === 'SUPER_ADMIN'
     ? superAdminGroups
     : tenantGroups
-      .map((group) => ({ ...group, items: group.items.filter((item) => hasModuleAccess(profile, item.permission)) }))
+      .map((group) => ({
+        ...group,
+        items: group.items.filter((item) => (
+          hasModuleAccess(profile, item.permission)
+          && (!item.anyPermission?.length || hasAnyModuleAccess(profile, item.anyPermission))
+        )),
+      }))
       .filter((group) => group.items.length)
   const navItems = groups.flatMap((group) => group.items)
   const mobileNavItems = navItems.slice(0, 5)

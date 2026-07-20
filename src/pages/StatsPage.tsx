@@ -7,7 +7,7 @@ import { AnimatedPage } from '../components/ui/sport'
 import { getCompletedMatchSheets, getCurrentCompany } from '../lib/data'
 import { displayPosition } from '../lib/positions'
 import { usePrimaryStatLabel } from '../lib/stats-labels'
-import type { CompletedMatchSheet, MatchTeamResult, PlayerStatRow } from '../lib/types'
+import type { CompletedMatchSheet, MatchGameResult, MatchTeamResult, PlayerStatRow } from '../lib/types'
 
 type MatchSummary = {
   matchId: string
@@ -15,6 +15,8 @@ type MatchSummary = {
   title: string
   rows: PlayerStatRow[]
   hasSavedStats: boolean
+  teamResults: MatchTeamResult[]
+  gameResults: MatchGameResult[]
 }
 
 function aggregate(rows: PlayerStatRow[]) {
@@ -50,6 +52,7 @@ export function StatsPage() {
   const company = useQuery({ queryKey: ['current-company'], queryFn: getCurrentCompany })
 
   const events = useMemo(() => buildMatchSummaries(sheets.data ?? []), [sheets.data])
+  const championRanking = useMemo(() => buildChampionRanking(events), [events])
   const selectedEvent = events.find((event) => event.matchId === selectedMatchId) ?? events[0] ?? null
   const rows = useMemo(() => selectedEvent?.rows ?? [], [selectedEvent])
   const presentRows = useMemo(() => rows.filter((row) => row.present).sort(comparePlayerRows), [rows])
@@ -61,7 +64,8 @@ export function StatsPage() {
   const topAssistant = assistants.find((player) => player.assists > 0) ?? assistants[0]
   const totalGoals = rows.reduce((sum, row) => sum + (row.goals ?? 0), 0)
   const totalAssists = rows.reduce((sum, row) => sum + (row.assists ?? 0), 0)
-  const teamResults = selectedEvent?.rows.find((row) => row.match?.team_results?.length)?.match?.team_results ?? []
+  const teamResults = selectedEvent?.teamResults ?? []
+  const gameResults = selectedEvent?.gameResults ?? []
   const teamWinner = getTeamWinner(teamResults)
 
   const whatsappSummary = [
@@ -74,7 +78,9 @@ export function StatsPage() {
     `Total de ${primaryStat.labels.lowerPlural}: ${totalGoals}`,
     `Assistencias: ${totalAssists}`,
     `Destaque: ${topScorer ? `${topScorer.name} (${topScorer.goals})` : '-'}`,
-    teamResults.length ? `Resultado: ${formatTeamScore(teamResults)}` : null,
+    gameResults.length ? 'Resultados das partidas:' : null,
+    ...gameResults.map((game, index) => `${index + 1}. ${formatGameResult(game, teamResults)}`),
+    teamResults.length ? `Vitorias por equipe: ${formatTeamWins(teamResults)}` : null,
     teamWinner ? `Equipe campea: ${teamWinner.name}` : null,
     '',
     `Ranking de ${primaryStat.labels.lowerPlural}:`,
@@ -150,6 +156,24 @@ export function StatsPage() {
               )}
             </div>
           </Card>
+          <Card className="p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="font-black">Ranking de campeoes</h2>
+                <p className="mt-1 text-sm text-muted-foreground">Rodadas finalizadas com vencedor unico.</p>
+              </div>
+              <Trophy className="text-yellow-600" size={22} />
+            </div>
+            <div className="mt-4 grid gap-2">
+              {championRanking.map((team, index) => (
+                <div key={team.name} className="flex items-center justify-between gap-3 rounded-lg border border-border bg-white/70 px-3 py-2 dark:bg-slate-950/40">
+                  <p className="font-black">{index + 1}. {team.name}</p>
+                  <span className="rounded-full bg-yellow-100 px-2.5 py-1 text-xs font-black text-yellow-900">{team.titles} titulo(s)</span>
+                </div>
+              ))}
+              {!championRanking.length && <p className="text-sm text-muted-foreground">Nenhum campeao registrado ainda.</p>}
+            </div>
+          </Card>
         </aside>
 
         {selectedEvent ? (
@@ -164,6 +188,7 @@ export function StatsPage() {
             totalGoals={totalGoals}
             totalAssists={totalAssists}
             teamResults={teamResults}
+            gameResults={gameResults}
             teamWinner={teamWinner}
             hasSavedStats={selectedEvent.hasSavedStats}
             statPlural={primaryStat.labels.plural}
@@ -193,6 +218,7 @@ function MatchSheet({
   totalGoals,
   totalAssists,
   teamResults,
+  gameResults,
   teamWinner,
   hasSavedStats,
   statPlural,
@@ -209,6 +235,7 @@ function MatchSheet({
   totalGoals: number
   totalAssists: number
   teamResults: MatchTeamResult[]
+  gameResults: MatchGameResult[]
   teamWinner: MatchTeamResult | null
   hasSavedStats: boolean
   statPlural: string
@@ -253,7 +280,7 @@ function MatchSheet({
             topAssistant={topAssistant}
             statLower={statLower}
           />
-          <ResultPanel teamResults={teamResults} teamWinner={teamWinner} />
+          <ResultPanel teamResults={teamResults} gameResults={gameResults} teamWinner={teamWinner} />
         </div>
       </div>
 
@@ -380,7 +407,15 @@ function StatsRankingTable({ title, statPlural, rows }: { title: string; statPlu
   )
 }
 
-function ResultPanel({ teamResults, teamWinner }: { teamResults: MatchTeamResult[]; teamWinner: MatchTeamResult | null }) {
+function ResultPanel({
+  teamResults,
+  gameResults,
+  teamWinner,
+}: {
+  teamResults: MatchTeamResult[]
+  gameResults: MatchGameResult[]
+  teamWinner: MatchTeamResult | null
+}) {
   return (
     <div className="rounded-2xl border border-border bg-white p-4 dark:bg-slate-950">
       <h3 className="mb-4 flex items-center gap-2 text-lg font-black">
@@ -389,7 +424,18 @@ function ResultPanel({ teamResults, teamWinner }: { teamResults: MatchTeamResult
       </h3>
       {teamResults.length ? (
         <div className="grid gap-3">
-          <p className="rounded-xl bg-slate-950 px-4 py-3 text-center text-2xl font-black text-white">{formatTeamScore(teamResults)}</p>
+          {gameResults.length ? (
+            <div className="grid gap-1.5">
+              {gameResults.map((game, index) => (
+                <p key={game.id} className="rounded-lg bg-slate-950 px-3 py-2 text-center text-sm font-black text-white">
+                  Jogo {index + 1}: {formatGameResult(game, teamResults)}
+                </p>
+              ))}
+            </div>
+          ) : (
+            <p className="rounded-xl bg-slate-950 px-4 py-3 text-center text-xl font-black text-white">{formatLegacyTeamScore(teamResults)}</p>
+          )}
+          <p className="rounded-lg bg-muted px-3 py-2 text-center text-sm font-black">{formatTeamWins(teamResults)}</p>
           <p className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-black text-green-900 dark:border-green-900/50 dark:bg-green-950/30 dark:text-green-100">
             Campeao: {teamWinner?.name ?? 'Empate'}
           </p>
@@ -413,9 +459,23 @@ function buildMatchSummaries(sheets: CompletedMatchSheet[]): MatchSummary[] {
       title: sheet.match.notes?.replace(/^Agenda automatica:\s*/i, '').trim() || 'Evento esportivo',
       rows: sheet.rows,
       hasSavedStats: sheet.hasSavedStats,
+      teamResults: sheet.match.team_results ?? [],
+      gameResults: sheet.match.game_results ?? [],
     }))
     .filter((event) => event.rows.length > 0)
     .sort((left, right) => new Date(right.scheduledAt).getTime() - new Date(left.scheduledAt).getTime())
+}
+
+function buildChampionRanking(events: MatchSummary[]) {
+  const counts = new Map<string, number>()
+  events.forEach((event) => {
+    const winner = getTeamWinner(event.teamResults)
+    if (!winner) return
+    counts.set(winner.name, (counts.get(winner.name) ?? 0) + 1)
+  })
+  return [...counts.entries()]
+    .map(([name, titles]) => ({ name, titles }))
+    .sort((left, right) => right.titles - left.titles || left.name.localeCompare(right.name, 'pt-BR'))
 }
 
 function comparePlayerRows(left: PlayerStatRow, right: PlayerStatRow) {
@@ -429,9 +489,20 @@ function getTeamWinner(results: MatchTeamResult[]) {
   return winners.length === 1 ? winners[0] : null
 }
 
-function formatTeamScore(results: MatchTeamResult[]) {
+function formatLegacyTeamScore(results: MatchTeamResult[]) {
   if (!results.length) return 'Sem resultado informado'
   return results.map((team) => `${team.name} ${team.score}`).join(' x ')
+}
+
+function formatTeamWins(results: MatchTeamResult[]) {
+  if (!results.length) return 'Sem vitorias registradas'
+  return results.map((team) => `${team.name}: ${team.score} vit.`).join(' | ')
+}
+
+function formatGameResult(game: MatchGameResult, teams: MatchTeamResult[]) {
+  const home = teams.find((team) => team.id === game.homeTeamId)?.name ?? 'Equipe 1'
+  const away = teams.find((team) => team.id === game.awayTeamId)?.name ?? 'Equipe 2'
+  return `${home} ${game.homeScore} x ${game.awayScore} ${away}`
 }
 
 function formatDate(value: string) {

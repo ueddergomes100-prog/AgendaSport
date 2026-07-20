@@ -8,13 +8,42 @@ import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 import { env } from './env.js'
 import { requireAuth, requireSuperAdmin } from './auth.js'
+import {
+  createPaymentCharge,
+  releasePlayerAfterPayment,
+  runMonthlyBillingForTenant,
+  startBillingWorker,
+  type BillingProvider,
+} from './billing.js'
+import {
+  getWaitlistPlayerIds,
+  notifyGroupAttendanceUpdate,
+  notifyPromotedWaitlistPlayers,
+  sendConfiguredGroupMessage,
+} from './group-notifications.js'
 import { adminSupabase } from './supabase.js'
+import { paymentWebhookRouter } from './payment-webhooks.js'
 import { sendWhatsAppMessage } from './whatsapp.js'
 import { whatsappWebhookRouter } from './whatsapp-webhook.js'
-import { confirmationReminderStages, runConfirmationReminderJob, sendConfirmationForMatch, startConfirmationReminderWorker } from './reminders.js'
+import {
+  confirmationReminderStages,
+  runConfirmationReminderJob,
+  sendConfirmationForMatch,
+  sendConfirmationForNewPlayer,
+  startConfirmationReminderWorker,
+} from './reminders.js'
 
 const app = express()
 type AuthUser = { id: string; tenant_id: string | null; role: string; permissions?: Record<string, boolean> | null }
+type ModulePermission =
+  | 'confirmations'
+  | 'players'
+  | 'draw'
+  | 'stats'
+  | 'results'
+  | 'finance'
+  | 'settings'
+  | 'suspensions'
 const corsOrigins = env.CORS_ORIGIN.split(',').map((origin) => origin.trim()).filter(Boolean)
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -42,6 +71,7 @@ app.get('/api/health', (_req, res) => {
 })
 
 app.use('/api/webhooks', whatsappWebhookRouter)
+app.use('/api/webhooks/payments', paymentWebhookRouter)
 
 async function createSignupCompany(input: SignupCompanyInput): Promise<SignupCompany> {
   const currentSchemaPayload = {
@@ -255,11 +285,17 @@ app.post('/api/public-registration/:token/players', async (req, res) => {
       metadata: { source: 'public_registration_success' },
     }).catch((error) => ({ status: 'FAILED', response: error instanceof Error ? error.message : 'Falha ao enviar WhatsApp de cadastro.' }))
 
+    const confirmationSummaries = await sendConfirmationForNewPlayer(company.id, player.id).catch((error) => {
+      console.warn('Nao foi possivel convocar automaticamente o novo participante.', error)
+      return []
+    })
+
     return res.status(201).json({
       player_id: player.id,
       name: player.name,
       company: company.name,
       whatsapp_status: whatsappResult.status,
+      automatic_confirmations_sent: confirmationSummaries.reduce((total, summary) => total + summary.remindersSent, 0),
     })
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -364,6 +400,113 @@ app.post('/api/matches/:matchId/confirmations/send', requireAuth, async (req, re
   }
 })
 
+app.put('/api/matches/:matchId/attendance/:playerId', requireAuth, async (req, res) => {
+  const paramsSchema = z.object({
+    matchId: z.string().uuid(),
+    playerId: z.string().uuid(),
+  })
+  const bodySchema = z.object({
+    status: z.enum(['CONVIDADO', 'CONFIRMADO', 'RECUSOU', 'ESPERA', 'COMPARECEU', 'FALTOU']),
+  })
+  const { matchId, playerId } = paramsSchema.parse(req.params)
+  const { status } = bodySchema.parse(req.body)
+  const tenantId = req.user!.role === 'SUPER_ADMIN' ? null : req.user!.tenant_id
+  if (req.user!.role !== 'SUPER_ADMIN' && !tenantId) return res.status(400).json({ error: 'Usuario sem tenant.' })
+
+  const requiredPermission: ModulePermission = ['COMPARECEU', 'FALTOU'].includes(status) ? 'results' : 'confirmations'
+  if (!canAccessModule(req.user!, requiredPermission)) {
+    return res.status(403).json({ error: 'Voce nao tem permissao para alterar esta informacao.' })
+  }
+
+  let matchQuery = adminSupabase.from('matches').select('id, tenant_id, status').eq('id', matchId)
+  if (tenantId) matchQuery = matchQuery.eq('tenant_id', tenantId)
+  const { data: match, error: matchError } = await matchQuery.maybeSingle()
+  if (matchError) return res.status(500).json({ error: matchError.message })
+  if (!match) return res.status(404).json({ error: 'Evento nao encontrado.' })
+  if (['ENCERRADA', 'CANCELADA'].includes(match.status) && !['COMPARECEU', 'FALTOU'].includes(status)) {
+    return res.status(409).json({ error: 'Evento encerrado ou cancelado nao aceita novas respostas.' })
+  }
+
+  const waitlistBefore = await getWaitlistPlayerIds(matchId)
+  let rpcResult = await adminSupabase.rpc('set_attendance_response', {
+    p_match_id: matchId,
+    p_player_id: playerId,
+    p_status: status,
+    p_source: 'MANUAL',
+    p_responded_by: req.user!.id,
+  })
+  if (rpcResult.error && rpcResult.error.message.includes('Could not find the function')) {
+    rpcResult = await adminSupabase.rpc('set_attendance_response', {
+      p_match_id: matchId,
+      p_player_id: playerId,
+      p_status: status,
+    })
+  }
+  if (rpcResult.error) return res.status(400).json({ error: rpcResult.error.message })
+
+  const { data: attendance, error: attendanceError } = await adminSupabase
+    .from('attendance')
+    .select('*')
+    .eq('match_id', matchId)
+    .eq('player_id', playerId)
+    .single()
+  if (attendanceError) return res.status(500).json({ error: attendanceError.message })
+
+  await notifyPromotedWaitlistPlayers(matchId, waitlistBefore).catch((error) => {
+    console.warn('Nao foi possivel avisar o participante promovido da fila.', error)
+  })
+  if (status !== 'CONVIDADO') {
+    await notifyGroupAttendanceUpdate({
+      tenantId: match.tenant_id,
+      matchId,
+      playerId,
+      status: attendance.status,
+    }).catch((error) => {
+      console.warn('Nao foi possivel atualizar o grupo configurado.', error)
+    })
+  }
+
+  return res.json(attendance)
+})
+
+app.post('/api/matches/:matchId/group/share', requireAuth, async (req, res) => {
+  const paramsSchema = z.object({ matchId: z.string().uuid() })
+  const bodySchema = z.object({
+    kind: z.enum(['DRAW', 'LIST', 'REPORT']),
+    message: z.string().min(1).max(4000),
+  })
+  const { matchId } = paramsSchema.parse(req.params)
+  const input = bodySchema.parse(req.body)
+  const tenantId = req.user!.role === 'SUPER_ADMIN' ? null : req.user!.tenant_id
+  if (req.user!.role !== 'SUPER_ADMIN' && !tenantId) return res.status(400).json({ error: 'Usuario sem tenant.' })
+
+  const hasPermission = input.kind === 'DRAW'
+    ? canAccessModule(req.user!, 'draw')
+    : input.kind === 'REPORT'
+      ? canAccessModule(req.user!, 'stats') || canAccessModule(req.user!, 'results')
+      : canAccessModule(req.user!, 'confirmations')
+  if (!hasPermission) {
+    return res.status(403).json({ error: 'Voce nao tem permissao para compartilhar esta informacao.' })
+  }
+
+  let matchQuery = adminSupabase.from('matches').select('id, tenant_id').eq('id', matchId)
+  if (tenantId) matchQuery = matchQuery.eq('tenant_id', tenantId)
+  const { data: match, error: matchError } = await matchQuery.maybeSingle()
+  if (matchError) return res.status(500).json({ error: matchError.message })
+  if (!match) return res.status(404).json({ error: 'Evento nao encontrado.' })
+
+  try {
+    const result = await sendConfiguredGroupMessage(match.tenant_id, input.message, {
+      event: input.kind.toLowerCase(),
+      match_id: matchId,
+      requested_by: req.user!.id,
+    })
+    return res.json(result)
+  } catch (error) {
+    return res.status(502).json({ error: error instanceof Error ? error.message : 'Nao foi possivel enviar ao grupo.' })
+  }
+})
+
 app.post('/api/admin/companies/:companyId/admin-user', requireAuth, requireSuperAdmin, async (req, res) => {
   const paramsSchema = z.object({ companyId: z.string().uuid() })
   const bodySchema = z.object({
@@ -411,17 +554,31 @@ app.post('/api/admin/companies/:companyId/admin-user', requireAuth, requireSuper
 
 const teamPermissionsSchema = z.object({
   confirmations: z.boolean().default(false),
+  players: z.boolean().default(false),
+  draw: z.boolean().default(false),
   stats: z.boolean().default(false),
+  results: z.boolean().default(false),
   finance: z.boolean().default(false),
   settings: z.boolean().default(false),
+  suspensions: z.boolean().default(false),
 })
 
-function canManageTeamUsers(user: AuthUser) {
-  if (user.role === 'ADMINISTRADOR') return true
-  return Boolean(user.permissions?.settings)
+const fullTeamPermissions = {
+  confirmations: true,
+  players: true,
+  draw: true,
+  stats: true,
+  results: true,
+  finance: true,
+  settings: true,
+  suspensions: true,
 }
 
-function canAccessModule(user: AuthUser, module: 'confirmations' | 'stats' | 'finance' | 'settings') {
+function canManageTeamUsers(user: AuthUser) {
+  return user.role === 'SUPER_ADMIN' || user.role === 'ADMINISTRADOR'
+}
+
+function canAccessModule(user: AuthUser, module: ModulePermission) {
   if (user.role === 'SUPER_ADMIN' || user.role === 'ADMINISTRADOR') return true
   const permissions = user.permissions ?? {}
   const hasExplicitPermissionSet = Object.keys(permissions).length > 0
@@ -431,7 +588,7 @@ function canAccessModule(user: AuthUser, module: 'confirmations' | 'stats' | 'fi
 
 function normalizeTeamPermissions(value: unknown) {
   const parsed = teamPermissionsSchema.safeParse(value ?? {})
-  if (!parsed.success) return { confirmations: false, stats: false, finance: false, settings: false }
+  if (!parsed.success) return teamPermissionsSchema.parse({})
   return parsed.data
 }
 
@@ -497,7 +654,16 @@ app.post('/api/company/users', requireAuth, async (req, res) => {
     email: z.string().email(),
     password: z.string().min(6).max(128),
     role: z.enum(['ADMINISTRADOR', 'ORGANIZADOR', 'OPERADOR']).default('OPERADOR'),
-    permissions: teamPermissionsSchema.default({ confirmations: true, stats: false, finance: false, settings: false }),
+    permissions: teamPermissionsSchema.default({
+      confirmations: true,
+      players: false,
+      draw: false,
+      stats: false,
+      results: false,
+      finance: false,
+      settings: false,
+      suspensions: false,
+    }),
   })
   const input = bodySchema.parse(req.body)
 
@@ -518,7 +684,7 @@ app.post('/api/company/users', requireAuth, async (req, res) => {
     tenant_id: tenantId,
     full_name: input.full_name,
     role: input.role,
-    permissions: input.role === 'ADMINISTRADOR' ? { confirmations: true, stats: true, finance: true, settings: true } : input.permissions,
+    permissions: input.role === 'ADMINISTRADOR' ? fullTeamPermissions : input.permissions,
   }
   const { error: profileError } = await adminSupabase.from('profiles').upsert(profilePayload, { onConflict: 'id' })
 
@@ -573,7 +739,7 @@ app.patch('/api/company/users/:userId', requireAuth, async (req, res) => {
   const patch = {
     ...(input.full_name ? { full_name: input.full_name } : {}),
     ...(input.role ? { role: input.role } : {}),
-    ...(input.permissions ? { permissions: nextRole === 'ADMINISTRADOR' ? { confirmations: true, stats: true, finance: true, settings: true } : input.permissions } : {}),
+    ...(input.permissions ? { permissions: nextRole === 'ADMINISTRADOR' ? fullTeamPermissions : input.permissions } : {}),
   }
 
   const { error } = await adminSupabase.from('profiles').update(patch).eq('id', userId).eq('tenant_id', tenantId)
@@ -600,7 +766,7 @@ app.get('/api/finance/transactions', requireAuth, async (req, res) => {
 
   const { data, error } = await adminSupabase
     .from('finance_transactions')
-    .select('*, player:players(id, name)')
+    .select('*, player:players(id, name), responsible:profiles(full_name)')
     .eq('tenant_id', tenantId)
     .order('occurred_on', { ascending: false })
     .order('created_at', { ascending: false })
@@ -633,13 +799,14 @@ app.post('/api/finance/transactions', requireAuth, async (req, res) => {
     amount: z.coerce.number().positive(),
     occurred_on: z.string().min(10).max(10),
     status: z.enum(['CONFIRMADO', 'PENDENTE', 'CANCELADO']).default('CONFIRMADO'),
+    payment_method: z.string().min(2).max(40).default('OUTRO'),
   })
   const input = schema.parse(req.body)
 
   const { data, error } = await adminSupabase
     .from('finance_transactions')
-    .insert({ ...input, tenant_id: tenantId })
-    .select('*, player:players(id, name)')
+    .insert({ ...input, tenant_id: tenantId, created_by: req.user!.id })
+    .select('*, player:players(id, name), responsible:profiles(full_name)')
     .single()
 
   if (error && isMissingFinanceTransactionsError(error.message)) {
@@ -671,6 +838,7 @@ app.patch('/api/finance/transactions/:transactionId', requireAuth, async (req, r
     amount: z.coerce.number().positive().optional(),
     occurred_on: z.string().min(10).max(10).optional(),
     status: z.enum(['CONFIRMADO', 'PENDENTE', 'CANCELADO']).optional(),
+    payment_method: z.string().min(2).max(40).optional(),
   })
   const { transactionId } = paramsSchema.parse(req.params)
   const input = schema.parse(req.body)
@@ -715,6 +883,99 @@ app.delete('/api/finance/transactions/:transactionId', requireAuth, async (req, 
   return res.status(204).send()
 })
 
+app.post('/api/payments', requireAuth, async (req, res) => {
+  let tenantId: string
+  try {
+    tenantId = requireRequestTenantId(req.user!)
+  } catch (error) {
+    return res.status(400).json({ error: error instanceof Error ? error.message : 'Usuario sem tenant.' })
+  }
+  if (!canAccessModule(req.user!, 'finance')) return res.status(403).json({ error: 'Voce nao tem permissao para gerar cobrancas.' })
+
+  const schema = z.object({
+    player_id: z.string().uuid().nullable().optional(),
+    match_id: z.string().uuid().nullable().optional(),
+    provider: z.enum(['MANUAL_PIX', 'ASAAS', 'MERCADO_PAGO']).default('MANUAL_PIX'),
+    amount: z.coerce.number().positive(),
+    due_date: z.string().min(10).max(10),
+    status: z.enum(['PENDENTE', 'PAGO', 'ATRASADO', 'CANCELADO']).default('PENDENTE'),
+    paid_at: z.string().datetime().nullable().optional(),
+  })
+  const input = schema.parse(req.body)
+
+  try {
+    if (input.player_id && input.status === 'PENDENTE') {
+      const payment = await createPaymentCharge({
+        tenantId,
+        playerId: input.player_id,
+        matchId: input.match_id,
+        amount: input.amount,
+        dueDate: input.due_date,
+        provider: input.provider,
+        description: input.match_id ? 'Pagamento do evento' : 'Cobranca avulsa',
+      })
+      return res.status(201).json(payment)
+    }
+
+    const { data, error } = await adminSupabase
+      .from('payments')
+      .insert({
+        ...input,
+        tenant_id: tenantId,
+        paid_at: input.status === 'PAGO' ? input.paid_at ?? new Date().toISOString() : input.paid_at ?? null,
+      })
+      .select()
+      .single()
+    if (error) return res.status(500).json({ error: error.message })
+    return res.status(201).json(data)
+  } catch (error) {
+    return res.status(502).json({ error: error instanceof Error ? error.message : 'Nao foi possivel gerar a cobranca.' })
+  }
+})
+
+app.patch('/api/payments/:paymentId', requireAuth, async (req, res) => {
+  let tenantId: string
+  try {
+    tenantId = requireRequestTenantId(req.user!)
+  } catch (error) {
+    return res.status(400).json({ error: error instanceof Error ? error.message : 'Usuario sem tenant.' })
+  }
+  if (!canAccessModule(req.user!, 'finance')) return res.status(403).json({ error: 'Voce nao tem permissao para alterar cobrancas.' })
+
+  const { paymentId } = z.object({ paymentId: z.string().uuid() }).parse(req.params)
+  const input = z.object({
+    status: z.enum(['PENDENTE', 'PAGO', 'ATRASADO', 'CANCELADO']).optional(),
+    paid_at: z.string().datetime().nullable().optional(),
+    due_date: z.string().min(10).max(10).optional(),
+  }).parse(req.body)
+  const { data: current, error: currentError } = await adminSupabase
+    .from('payments')
+    .select('id, player_id')
+    .eq('id', paymentId)
+    .eq('tenant_id', tenantId)
+    .single()
+  if (currentError || !current) return res.status(404).json({ error: 'Cobranca nao encontrada.' })
+
+  const patch = {
+    ...input,
+    ...(input.status === 'PAGO' && input.paid_at === undefined ? { paid_at: new Date().toISOString() } : {}),
+  }
+  const { data, error } = await adminSupabase
+    .from('payments')
+    .update(patch)
+    .eq('id', paymentId)
+    .eq('tenant_id', tenantId)
+    .select()
+    .single()
+  if (error) return res.status(500).json({ error: error.message })
+  if (input.status === 'PAGO') {
+    await releasePlayerAfterPayment(tenantId, current.player_id).catch((releaseError) => {
+      console.warn('[billing] automatic release failed', releaseError)
+    })
+  }
+  return res.json(data)
+})
+
 app.post('/api/billing/payment-link', requireAuth, async (req, res) => {
   const schema = z.object({
     player_id: z.string().uuid(),
@@ -730,21 +991,20 @@ app.post('/api/billing/payment-link', requireAuth, async (req, res) => {
     return res.status(400).json({ error: error instanceof Error ? error.message : 'Usuario sem tenant.' })
   }
   if (!canAccessModule(req.user!, 'finance')) return res.status(403).json({ error: 'Voce nao tem permissao para gerar cobrancas.' })
-  const { data, error } = await adminSupabase
-    .from('payments')
-    .insert({
-      tenant_id: tenantId,
-      player_id: input.player_id,
+  try {
+    const payment = await createPaymentCharge({
+      tenantId,
+      playerId: input.player_id,
       amount: input.amount,
-      due_date: input.due_date,
-      provider: input.provider,
-      status: 'PENDENTE',
+      dueDate: input.due_date,
+      provider: input.provider as BillingProvider,
+      description: 'Cobranca Agenda Sport',
+      sendMessage: true,
     })
-    .select()
-    .single()
-
-  if (error) return res.status(500).json({ error: error.message })
-  return res.status(201).json({ payment: data, checkout_url: data.checkout_url })
+    return res.status(201).json({ payment, checkout_url: payment.checkout_url })
+  } catch (error) {
+    return res.status(502).json({ error: error instanceof Error ? error.message : 'Nao foi possivel gerar a cobranca.' })
+  }
 })
 
 app.post('/api/billing/monthly/run', requireAuth, async (req, res) => {
@@ -756,74 +1016,12 @@ app.post('/api/billing/monthly/run', requireAuth, async (req, res) => {
   }
   if (!canAccessModule(req.user!, 'finance')) return res.status(403).json({ error: 'Voce nao tem permissao para gerar mensalidades.' })
 
-  const { data: settings, error: settingsError } = await adminSupabase
-    .from('billing_settings')
-    .select('monthly_billing_day, default_provider')
-    .eq('tenant_id', tenantId)
-    .maybeSingle()
-  if (settingsError && !isMissingBillingTableError(settingsError.message)) return res.status(500).json({ error: settingsError.message })
-
-  const today = new Date()
-  const year = today.getFullYear()
-  const month = today.getMonth()
-  const dueDay = Math.max(1, Math.min(28, Number(settings?.monthly_billing_day ?? 2)))
-  const dueDate = new Date(year, month, dueDay)
-  const periodKey = `${year}-${String(month + 1).padStart(2, '0')}`
-
-  const { data: pickupPriceRows, error: pickupError } = await adminSupabase
-    .from('pickups')
-    .select('monthly_price')
-    .eq('tenant_id', tenantId)
-    .gt('monthly_price', 0)
-    .order('monthly_price', { ascending: false })
-    .limit(1)
-  if (pickupError) return res.status(500).json({ error: pickupError.message })
-  const amount = Number(pickupPriceRows?.[0]?.monthly_price ?? 0)
-  if (!amount) return res.status(400).json({ error: 'Configure o valor mensal em pelo menos um evento antes de gerar mensalidades.' })
-
-  const { data: players, error: playersError } = await adminSupabase
-    .from('players')
-    .select('id, name')
-    .eq('tenant_id', tenantId)
-    .eq('status', 'ATIVO')
-    .eq('type', 'MENSALISTA')
-  if (playersError) return res.status(500).json({ error: playersError.message })
-  if (!players?.length) return res.json({ created: 0, skipped: 0, amount, due_date: dueDate.toISOString().slice(0, 10) })
-
-  const { data: existing, error: existingError } = await adminSupabase
-    .from('payments')
-    .select('player_id')
-    .eq('tenant_id', tenantId)
-    .gte('due_date', `${periodKey}-01`)
-    .lte('due_date', `${periodKey}-31`)
-    .neq('status', 'CANCELADO')
-  if (existingError) return res.status(500).json({ error: existingError.message })
-  const existingPlayerIds = new Set((existing ?? []).map((payment) => payment.player_id).filter(Boolean))
-  const missingPlayers = players.filter((player) => !existingPlayerIds.has(player.id))
-
-  if (missingPlayers.length) {
-    const { error: insertError } = await adminSupabase.from('payments').insert(missingPlayers.map((player) => ({
-      tenant_id: tenantId,
-      player_id: player.id,
-      provider: settings?.default_provider ?? 'MANUAL_PIX',
-      amount,
-      due_date: dueDate.toISOString().slice(0, 10),
-      status: 'PENDENTE',
-    })))
-    if (insertError) return res.status(500).json({ error: insertError.message })
+  try {
+    return res.json(await runMonthlyBillingForTenant(tenantId, { force: true }))
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : 'Nao foi possivel gerar mensalidades.' })
   }
-
-  return res.json({
-    created: missingPlayers.length,
-    skipped: players.length - missingPlayers.length,
-    amount,
-    due_date: dueDate.toISOString().slice(0, 10),
-  })
 })
-
-function isMissingBillingTableError(message: string) {
-  return message.includes('billing_settings') && (message.includes('schema cache') || message.includes('does not exist') || message.includes('relation'))
-}
 
 function isMissingFinanceTransactionsError(message: string) {
   return message.includes('finance_transactions') && (message.includes('schema cache') || message.includes('does not exist') || message.includes('relation'))
@@ -855,3 +1053,4 @@ app.listen(env.PORT, () => {
 })
 
 startConfirmationReminderWorker()
+startBillingWorker()

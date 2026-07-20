@@ -11,3 +11,7 @@ export function hasModuleAccess(profile: Profile, permission?: PermissionKey) {
 
   return Boolean(permissions[permission])
 }
+
+export function hasAnyModuleAccess(profile: Profile, permissions: PermissionKey[]) {
+  return permissions.some((permission) => hasModuleAccess(profile, permission))
+}
