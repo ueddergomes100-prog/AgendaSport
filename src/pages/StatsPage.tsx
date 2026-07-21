@@ -1,18 +1,21 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { CalendarDays, ClipboardList, Copy, Download, Medal, MessageCircle, Trophy } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { ArrowUpRight, CalendarDays, ClipboardList, Copy, Download, Medal, MessageCircle, Trophy } from 'lucide-react'
 import { Button } from '../components/ui/button'
 import { Card } from '../components/ui/card'
 import { AnimatedPage } from '../components/ui/sport'
-import { getCompletedMatchSheets, getCurrentCompany } from '../lib/data'
+import { getCompletedMatchSheets, getCurrentCompany, getProfile } from '../lib/data'
+import { hasModuleAccess } from '../lib/permissions'
 import { displayPosition } from '../lib/positions'
 import { usePrimaryStatLabel } from '../lib/stats-labels'
-import type { CompletedMatchSheet, MatchGameResult, MatchTeamResult, PlayerStatRow } from '../lib/types'
+import type { CompletedMatchSheet, Match, MatchGameResult, MatchTeamResult, PlayerStatRow } from '../lib/types'
 
 type MatchSummary = {
   matchId: string
   scheduledAt: string
   title: string
+  status: Match['status']
   rows: PlayerStatRow[]
   hasSavedStats: boolean
   teamResults: MatchTeamResult[]
@@ -50,10 +53,13 @@ export function StatsPage() {
   const primaryStat = usePrimaryStatLabel()
   const sheets = useQuery({ queryKey: ['completed-match-sheets'], queryFn: getCompletedMatchSheets })
   const company = useQuery({ queryKey: ['current-company'], queryFn: getCurrentCompany })
+  const profile = useQuery({ queryKey: ['profile'], queryFn: getProfile })
 
   const events = useMemo(() => buildMatchSummaries(sheets.data ?? []), [sheets.data])
   const championRanking = useMemo(() => buildChampionRanking(events), [events])
   const selectedEvent = events.find((event) => event.matchId === selectedMatchId) ?? events[0] ?? null
+  const selectedEventFinalized = selectedEvent?.status === 'ENCERRADA'
+  const canManageResults = profile.data ? hasModuleAccess(profile.data, 'results') : false
   const rows = useMemo(() => selectedEvent?.rows ?? [], [selectedEvent])
   const presentRows = useMemo(() => rows.filter((row) => row.present).sort(comparePlayerRows), [rows])
   const absentRows = useMemo(() => rows.filter((row) => !row.present).sort(comparePlayerRows), [rows])
@@ -100,18 +106,18 @@ export function StatsPage() {
       <section className="premium-panel no-print overflow-hidden rounded-2xl p-6">
         <div className="grid gap-6 lg:grid-cols-[1fr_auto] lg:items-center">
           <div>
-            <span className="page-kicker"><Trophy size={14} /> Sumulas finalizadas</span>
-            <h1 className="mt-4 max-w-3xl text-3xl font-black tracking-tight md:text-4xl">Escolha um evento e veja a sumula</h1>
+            <span className="page-kicker"><Trophy size={14} /> Eventos e sumulas</span>
+            <h1 className="mt-4 max-w-3xl text-3xl font-black tracking-tight md:text-4xl">Acompanhe o evento e veja a sumula</h1>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">
-              Aqui aparecem os eventos encerrados. Se a estatistica individual ainda nao foi salva, a sumula abre com a presenca real e os numeros zerados.
+              Eventos ja iniciados aparecem aqui para o fechamento. O relatorio, PDF e compartilhamento sao liberados depois que a sumula for finalizada.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="secondary" onClick={() => window.print()} disabled={!selectedEvent}>
+            <Button type="button" variant="secondary" onClick={() => window.print()} disabled={!selectedEventFinalized}>
               <Download size={16} />
               Salvar PDF
             </Button>
-            <Button type="button" onClick={openWhatsApp} disabled={!selectedEvent}>
+            <Button type="button" onClick={openWhatsApp} disabled={!selectedEventFinalized}>
               <MessageCircle size={16} />
               WhatsApp
             </Button>
@@ -124,7 +130,7 @@ export function StatsPage() {
           <Card className="p-4">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <h2 className="font-black">Eventos com sumula</h2>
+                <h2 className="font-black">Eventos realizados</h2>
                 <p className="mt-1 text-sm text-muted-foreground">{events.length} evento(s) encontrado(s)</p>
               </div>
               <ClipboardList className="text-primary" size={22} />
@@ -139,19 +145,21 @@ export function StatsPage() {
                 >
                   <p className="font-black">{event.title}</p>
                   <p className="mt-1 text-sm text-muted-foreground">{formatDate(event.scheduledAt)} as {formatTime(event.scheduledAt)}</p>
-                  {!event.hasSavedStats && (
+                  {event.status !== 'ENCERRADA' ? (
+                    <p className="mt-2 rounded-lg bg-blue-100 px-2 py-1 text-xs font-black text-blue-900">Em andamento - finalizar sumula</p>
+                  ) : !event.hasSavedStats ? (
                     <p className="mt-2 rounded-lg bg-amber-100 px-2 py-1 text-xs font-black text-amber-900">Somente presenca</p>
-                  )}
+                  ) : null}
                   <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs font-black">
-                    <span className="rounded-lg bg-green-100 px-2 py-1 text-green-800">{event.rows.filter((row) => row.present).length} pres.</span>
-                    <span className="rounded-lg bg-red-100 px-2 py-1 text-red-800">{event.rows.filter((row) => !row.present).length} aus.</span>
+                    <span className="rounded-lg bg-green-100 px-2 py-1 text-green-800">{event.rows.filter((row) => row.present).length} {event.status === 'ENCERRADA' ? 'pres.' : 'conf.'}</span>
+                    <span className="rounded-lg bg-red-100 px-2 py-1 text-red-800">{event.rows.filter((row) => !row.present).length} {event.status === 'ENCERRADA' ? 'aus.' : 'demais'}</span>
                     <span className="rounded-lg bg-yellow-100 px-2 py-1 text-yellow-900">{event.rows.reduce((sum, row) => sum + (row.goals ?? 0), 0)} gols</span>
                   </div>
                 </button>
               ))}
               {!events.length && (
                 <p className="rounded-xl border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
-                  Nenhum evento com estatisticas lancadas ainda.
+                  Nenhum evento iniciado ou finalizado encontrado.
                 </p>
               )}
             </div>
@@ -176,7 +184,9 @@ export function StatsPage() {
           </Card>
         </aside>
 
-        {selectedEvent ? (
+        {selectedEvent && selectedEvent.status !== 'ENCERRADA' ? (
+          <ActiveMatchNotice event={selectedEvent} canManageResults={canManageResults} />
+        ) : selectedEvent ? (
           <MatchSheet
             companyName={company.data?.name ?? 'Agenda Sport'}
             event={selectedEvent}
@@ -199,11 +209,54 @@ export function StatsPage() {
           <Card className="grid min-h-96 place-items-center p-10 text-center">
             <ClipboardList className="text-primary" size={40} />
             <h2 className="mt-4 text-2xl font-black">Nenhuma sumula encontrada</h2>
-            <p className="mt-2 max-w-md text-sm text-muted-foreground">Finalize um evento para que a sumula apareca aqui.</p>
+            <p className="mt-2 max-w-md text-sm text-muted-foreground">Quando um evento iniciar, ele aparecera aqui para lancamento e finalizacao.</p>
           </Card>
         )}
       </div>
     </AnimatedPage>
+  )
+}
+
+function ActiveMatchNotice({ event, canManageResults }: { event: MatchSummary; canManageResults: boolean }) {
+  const confirmed = event.rows.filter((row) => row.present).length
+  const otherResponses = event.rows.length - confirmed
+
+  return (
+    <Card className="overflow-hidden p-0">
+      <div className="bg-slate-950 p-5 text-white sm:p-6">
+        <span className="inline-flex rounded-lg bg-blue-100 px-2.5 py-1 text-xs font-black uppercase text-blue-900">Evento em andamento</span>
+        <h2 className="mt-4 text-2xl font-black sm:text-3xl">{event.title}</h2>
+        <p className="mt-2 text-sm font-bold text-white/70">{formatDate(event.scheduledAt)} as {formatTime(event.scheduledAt)}</p>
+      </div>
+      <div className="p-5 sm:p-6">
+        <h3 className="text-xl font-black">A sumula ainda precisa ser finalizada</h3>
+        <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
+          As confirmacoes abaixo ainda nao representam a presenca real. Abra o lancamento, confira quem compareceu e informe gols ou pontos e assistencias antes de encerrar.
+        </p>
+        <div className="mt-5 grid grid-cols-2 gap-3 sm:max-w-md">
+          <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-green-950">
+            <p className="text-xs font-black uppercase">Confirmados</p>
+            <p className="mt-1 text-3xl font-black">{confirmed}</p>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-slate-950">
+            <p className="text-xs font-black uppercase">Demais respostas</p>
+            <p className="mt-1 text-3xl font-black">{otherResponses}</p>
+          </div>
+        </div>
+        {canManageResults ? (
+          <Button asChild className="mt-5 w-full sm:w-auto">
+            <Link to={`/lancamento/${event.matchId}`}>
+              Abrir lancamento
+              <ArrowUpRight size={16} />
+            </Link>
+          </Button>
+        ) : (
+          <p className="mt-5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-950">
+            Um administrador com permissao de sumula precisa finalizar este evento.
+          </p>
+        )}
+      </div>
+    </Card>
   )
 }
 
@@ -457,6 +510,7 @@ function buildMatchSummaries(sheets: CompletedMatchSheet[]): MatchSummary[] {
       matchId: sheet.match.id,
       scheduledAt: sheet.match.scheduled_at,
       title: sheet.match.notes?.replace(/^Agenda automatica:\s*/i, '').trim() || 'Evento esportivo',
+      status: sheet.match.status,
       rows: sheet.rows,
       hasSavedStats: sheet.hasSavedStats,
       teamResults: sheet.match.team_results ?? [],
@@ -468,7 +522,7 @@ function buildMatchSummaries(sheets: CompletedMatchSheet[]): MatchSummary[] {
 
 function buildChampionRanking(events: MatchSummary[]) {
   const counts = new Map<string, number>()
-  events.forEach((event) => {
+  events.filter((event) => event.status === 'ENCERRADA').forEach((event) => {
     const winner = getTeamWinner(event.teamResults)
     if (!winner) return
     counts.set(winner.name, (counts.get(winner.name) ?? 0) + 1)

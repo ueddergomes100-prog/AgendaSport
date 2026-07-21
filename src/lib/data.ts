@@ -96,18 +96,31 @@ export async function getPlayerStats(): Promise<PlayerStatRow[]> {
 }
 
 export async function getCompletedMatchSheets(): Promise<CompletedMatchSheet[]> {
-  const { data: closedMatchesData, error: closedMatchesError } = await supabase
-    .from('matches')
-    .select('*')
-    .eq('status', 'ENCERRADA')
-    .order('scheduled_at', { ascending: false })
-  if (closedMatchesError) throw closedMatchesError
+  const now = new Date().toISOString()
+  const [closedMatchesResult, startedMatchesResult] = await Promise.all([
+    supabase
+      .from('matches')
+      .select('*')
+      .eq('status', 'ENCERRADA')
+      .order('scheduled_at', { ascending: false }),
+    supabase
+      .from('matches')
+      .select('*')
+      .in('status', ['AGENDADA', 'ABERTA'])
+      .lte('scheduled_at', now)
+      .order('scheduled_at', { ascending: false })
+      .limit(12),
+  ])
+  if (closedMatchesResult.error) throw closedMatchesResult.error
+  if (startedMatchesResult.error) throw startedMatchesResult.error
 
   const stats = await selectPlayerStats()
 
-  const closedMatches = (closedMatchesData ?? []) as Match[]
+  const closedMatches = (closedMatchesResult.data ?? []) as Match[]
+  const startedMatches = (startedMatchesResult.data ?? []) as Match[]
   const matchIds = unique([
     ...closedMatches.map((match) => match.id),
+    ...startedMatches.map((match) => match.id),
     ...stats.map((row) => row.match_id),
   ])
   if (!matchIds.length) return []
@@ -130,7 +143,12 @@ export async function getCompletedMatchSheets(): Promise<CompletedMatchSheet[]> 
   const statsByMatch = groupBy(stats, (row) => row.match_id)
   const attendanceByMatch = groupBy(attendance, (row) => row.match_id)
 
-  return matches.filter((match) => match.status === 'ENCERRADA' || (statsByMatch.get(match.id)?.length ?? 0) > 0).map((match) => {
+  return matches.filter((match) => {
+    const hasSavedStats = (statsByMatch.get(match.id)?.length ?? 0) > 0
+    const hasAttendance = (attendanceByMatch.get(match.id)?.length ?? 0) > 0
+    const hasStarted = !['ENCERRADA', 'CANCELADA'].includes(match.status) && new Date(match.scheduled_at).getTime() <= Date.now()
+    return match.status === 'ENCERRADA' || hasSavedStats || (hasStarted && hasAttendance)
+  }).map((match) => {
     const savedRows = statsByMatch.get(match.id) ?? []
     const savedByPlayer = new Map(savedRows.map((row) => [row.player_id, row]))
     const consumedStats = new Set<string>()

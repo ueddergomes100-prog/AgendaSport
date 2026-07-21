@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { motion, useMotionValue, useSpring, useTransform } from 'framer-motion'
 import {
@@ -10,6 +11,7 @@ import {
   Dumbbell,
   Goal,
   LogOut,
+  Menu,
   Moon,
   Shield,
   Settings,
@@ -17,10 +19,12 @@ import {
   Sun,
   Trophy,
   Users,
+  X,
   Zap,
   type LucideIcon,
 } from 'lucide-react'
 import { hasAnyModuleAccess, hasModuleAccess } from '../../lib/permissions'
+import { buildMobileNavigation } from '../../lib/mobile-navigation'
 import { supabase } from '../../lib/supabase'
 import type { PermissionKey, Profile } from '../../lib/types'
 import { Button } from '../ui/button'
@@ -63,6 +67,7 @@ const tenantGroups: ShellNavGroup[] = [
 export function AppShell({ profile, darkMode, setDarkMode }: { profile: Profile; darkMode: boolean; setDarkMode: (value: boolean) => void }) {
   const navigate = useNavigate()
   const location = useLocation()
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const groups = profile.role === 'SUPER_ADMIN'
     ? superAdminGroups
     : tenantGroups
@@ -75,7 +80,7 @@ export function AppShell({ profile, darkMode, setDarkMode }: { profile: Profile;
       }))
       .filter((group) => group.items.length)
   const navItems = groups.flatMap((group) => group.items)
-  const mobileNavItems = navItems.slice(0, 5)
+  const { primary: mobileNavItems, secondary: mobileMoreItems } = buildMobileNavigation(navItems, profile.role === 'SUPER_ADMIN')
   const currentItem = navItems.find((item) => item.to === location.pathname) ?? navItems.find((item) => item.to === '/')
   const CurrentIcon = currentItem?.icon
 
@@ -176,20 +181,70 @@ export function AppShell({ profile, darkMode, setDarkMode }: { profile: Profile;
           <Outlet />
         </motion.div>
 
-        <nav className="mobile-dock fixed inset-x-3 bottom-3 z-40 grid grid-cols-5 gap-1 rounded-lg border border-border bg-white/88 p-1 shadow-2xl shadow-slate-950/16 backdrop-blur-xl dark:border-slate-800 dark:bg-slate-950/88 md:hidden">
+        {mobileMenuOpen && mobileMoreItems.length > 0 && (
+          <div className="fixed inset-0 z-40 md:hidden" role="presentation">
+            <button type="button" aria-label="Fechar menu" className="absolute inset-0 bg-slate-950/45 backdrop-blur-[2px]" onClick={() => setMobileMenuOpen(false)} />
+            <section className="absolute inset-x-3 bottom-24 z-10 rounded-xl border border-border bg-white p-3 shadow-2xl dark:border-slate-800 dark:bg-slate-950" role="dialog" aria-label="Mais opcoes">
+              <div className="mb-3 flex items-center justify-between gap-3 px-1">
+                <div>
+                  <p className="font-black">Mais opcoes</p>
+                  <p className="text-xs text-muted-foreground">Acesse todos os modulos liberados.</p>
+                </div>
+                <Button type="button" variant="ghost" className="size-10 p-0" onClick={() => setMobileMenuOpen(false)} title="Fechar">
+                  <X size={18} />
+                </Button>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {mobileMoreItems.map((item) => {
+                  const Icon = item.icon
+                  return (
+                    <NavLink key={item.to} to={item.to} onClick={() => setMobileMenuOpen(false)} className={({ isActive }) => `flex min-h-14 items-center gap-3 rounded-lg border px-3 py-2 text-sm font-black ${isActive ? 'border-green-700 bg-green-50 text-green-900 dark:bg-green-950/40 dark:text-green-100' : 'border-border bg-muted/35 text-foreground'}`}>
+                      <Icon size={18} />
+                      <span>{item.label}</span>
+                    </NavLink>
+                  )
+                })}
+              </div>
+            </section>
+          </div>
+        )}
+
+        <nav
+          className="mobile-dock fixed inset-x-3 bottom-3 z-50 grid gap-1 rounded-lg border border-border bg-white/88 p-1 shadow-2xl shadow-slate-950/16 backdrop-blur-xl dark:border-slate-800 dark:bg-slate-950/88 md:hidden"
+          style={{ gridTemplateColumns: `repeat(${mobileNavItems.length + (mobileMoreItems.length ? 1 : 0)}, minmax(0, 1fr))` }}
+        >
           {mobileNavItems.map((item) => {
             const Icon = item.icon
             return (
-              <NavLink key={item.to} to={item.to} end={item.to === '/'} className={({ isActive }) => `mobile-nav-link ${isActive ? 'mobile-nav-link-active' : ''}`}>
+              <NavLink key={item.to} to={item.to} end={item.to === '/'} onClick={() => setMobileMenuOpen(false)} className={({ isActive }) => `mobile-nav-link ${isActive ? 'mobile-nav-link-active' : ''}`}>
                 <Icon size={18} />
-                <span>{item.label.split(' ')[0]}</span>
+                <span>{getMobileNavLabel(item)}</span>
               </NavLink>
             )
           })}
+          {mobileMoreItems.length > 0 && (
+            <button
+              type="button"
+              className={`mobile-nav-link ${mobileMenuOpen || mobileMoreItems.some((item) => item.to === location.pathname) ? 'mobile-nav-link-active' : ''}`}
+              onClick={() => setMobileMenuOpen((open) => !open)}
+              aria-expanded={mobileMenuOpen}
+              aria-label="Mais opcoes"
+            >
+              <Menu size={18} />
+              <span>Mais</span>
+            </button>
+          )}
         </nav>
       </main>
     </div>
   )
+}
+
+function getMobileNavLabel(item: ShellNavItem) {
+  if (item.to === '/') return 'Inicio'
+  if (item.to === '/participantes') return 'Pessoas'
+  if (item.to === '/estatisticas') return 'Estat.'
+  return item.label.split(' ')[0]
 }
 
 function NavItem({ item }: { item: ShellNavItem }) {

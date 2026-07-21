@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, CheckCircle2, ClipboardList, LoaderCircle, Plus, Save, Trash2, Trophy, Users } from 'lucide-react'
 import { Button } from '../components/ui/button'
 import { Card, CardTitle } from '../components/ui/card'
@@ -26,6 +26,7 @@ import { compareTextPtBr, getErrorMessage } from '../lib/utils'
 export function MatchStatsEntryPage() {
   const { matchId = '' } = useParams()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const matches = useQuery({ queryKey: ['matches'], queryFn: getMatches })
   const pickups = useQuery({ queryKey: ['pickups'], queryFn: getPickups })
   const attendance = useQuery({ queryKey: ['attendance', matchId], queryFn: () => getAttendance(matchId), enabled: Boolean(matchId) })
@@ -167,6 +168,7 @@ export function MatchStatsEntryPage() {
         }],
       )
       await Promise.all([attendance.refetch(), matchStats.refetch()])
+      await queryClient.invalidateQueries({ queryKey: ['completed-match-sheets'] })
       notify('Atualizado com sucesso.')
     } catch (error) {
       setFeedback(getErrorMessage(error, 'Nao foi possivel atualizar este participante.'))
@@ -258,7 +260,12 @@ export function MatchStatsEntryPage() {
         }
       }
 
-      await Promise.all([matches.refetch(), attendance.refetch(), matchStats.refetch()])
+      await Promise.all([
+        matches.refetch(),
+        attendance.refetch(),
+        matchStats.refetch(),
+        queryClient.invalidateQueries({ queryKey: ['completed-match-sheets'] }),
+      ])
       setFeedback(`${nextMatch ? 'Estatisticas salvas e proximo evento agendado.' : 'Estatisticas salvas com sucesso.'}${groupNotice}`)
       if (nextMatch) navigate(`/lancamento/${nextMatch.id}`)
     } catch (error) {
