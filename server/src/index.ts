@@ -475,6 +475,20 @@ app.put('/api/matches/:matchId/stats', requireAuth, async (req, res) => {
     if (updateError) return res.status(500).json({ error: updateError.message })
   }
 
+  const { error: auditError } = await adminSupabase.from('audit_logs').insert({
+    tenant_id: match.tenant_id,
+    user_id: req.user!.id,
+    action: input.match?.status === 'ENCERRADA' ? 'MATCH_STATS_FINALIZED' : 'MATCH_STATS_SAVED',
+    entity: 'matches',
+    entity_id: matchId,
+    metadata: {
+      match: input.match ?? null,
+      rows: input.rows,
+      saved_at: new Date().toISOString(),
+    },
+  })
+  if (auditError) console.warn('Nao foi possivel registrar a revisao da sumula.', auditError.message)
+
   return res.json({ saved: input.rows.length, status: input.match?.status ?? null })
 })
 
