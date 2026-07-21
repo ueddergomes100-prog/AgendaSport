@@ -49,12 +49,6 @@ async function requireTenantProfile() {
   return profile
 }
 
-async function getMatchTenantId(matchId: string) {
-  const { data, error } = await supabase.from('matches').select('tenant_id').eq('id', matchId).single()
-  if (error) throw error
-  return data.tenant_id
-}
-
 export async function getCompanies(): Promise<Company[]> {
   const { data, error } = await supabase.from('companies').select('*').order('name')
   if (error) throw error
@@ -785,38 +779,35 @@ export async function savePostMatchStats(
   },
   rows: Array<{ playerId: string; goals: number; assists: number; present: boolean; wins?: number; draws?: number; losses?: number }>,
 ) {
-  const tenantId = await getMatchTenantId(matchId)
-
-  const { error: matchError } = await supabase.from('matches').update(matchInput).eq('id', matchId)
-  if (matchError) {
-    const message = matchError.message ?? ''
-    if (message.includes('team_results') || message.includes('game_results')) {
-      const legacyMatchInput = { ...matchInput }
-      delete legacyMatchInput.team_results
-      delete legacyMatchInput.game_results
-      const { error: legacyMatchError } = await supabase.from('matches').update(legacyMatchInput).eq('id', matchId)
-      if (legacyMatchError) throw legacyMatchError
-    } else {
-      throw matchError
-    }
-  }
-
   if (!rows.length) return
+  await saveMatchStatsThroughApi(matchId, { match: matchInput, rows })
+}
 
-  const payload = rows.map((row) => ({
-    tenant_id: tenantId,
-    match_id: matchId,
-    player_id: row.playerId,
-    goals: row.goals,
-    assists: row.assists,
-    present: row.present,
-    wins: row.wins ?? 0,
-    draws: row.draws ?? 0,
-    losses: row.losses ?? 0,
-  }))
+export async function saveMatchPlayerStat(
+  matchId: string,
+  row: { playerId: string; goals: number; assists: number; present: boolean; wins?: number; draws?: number; losses?: number },
+) {
+  await saveMatchStatsThroughApi(matchId, { rows: [row] })
+}
 
-  const { error } = await supabase.from('match_player_stats').upsert(payload, { onConflict: 'match_id,player_id' })
-  if (error) throw error
+async function saveMatchStatsThroughApi(matchId: string, body: {
+  match?: Pick<Match, 'team_a_score' | 'team_b_score' | 'status'> & { team_results?: MatchTeamResult[]; game_results?: Match['game_results'] }
+  rows: Array<{ playerId: string; goals: number; assists: number; present: boolean; wins?: number; draws?: number; losses?: number }>
+}) {
+  const { data: session } = await supabase.auth.getSession()
+  const token = session.session?.access_token
+  if (!token) throw new Error('Sessao expirada. O rascunho foi mantido neste aparelho; entre novamente para sincronizar.')
+
+  const response = await fetch(apiUrl(`/api/matches/${matchId}/stats`), {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  })
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(payload.error ?? 'Nao foi possivel salvar a sumula agora.')
 }
 
 export async function createCompany(input: Partial<Company>) {

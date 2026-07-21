@@ -79,6 +79,27 @@ const paymentAccountLimiter = rateLimit({
   message: { error: 'Muitas tentativas de conexao financeira. Aguarde e tente novamente.' },
 })
 
+const matchStatRowSchema = z.object({
+  playerId: z.string().uuid(),
+  goals: z.number().int().min(0).max(999),
+  assists: z.number().int().min(0).max(999),
+  present: z.boolean(),
+  wins: z.number().int().min(0).max(999).optional().default(0),
+  draws: z.number().int().min(0).max(999).optional().default(0),
+  losses: z.number().int().min(0).max(999).optional().default(0),
+})
+
+const matchStatsSaveSchema = z.object({
+  match: z.object({
+    team_a_score: z.number().int().nullable(),
+    team_b_score: z.number().int().nullable(),
+    team_results: z.array(z.unknown()).optional(),
+    game_results: z.array(z.unknown()).optional(),
+    status: z.enum(['AGENDADA', 'ABERTA', 'ENCERRADA', 'CANCELADA']),
+  }).optional(),
+  rows: z.array(matchStatRowSchema).min(1).max(500),
+})
+
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', service: 'Agenda Sport API' })
 })
@@ -411,6 +432,50 @@ app.post('/api/matches/:matchId/confirmations/send', requireAuth, async (req, re
   } catch (error) {
     return res.status(500).json({ error: error instanceof Error ? error.message : 'Nao foi possivel enviar a convocacao.' })
   }
+})
+
+app.put('/api/matches/:matchId/stats', requireAuth, async (req, res) => {
+  const { matchId } = z.object({ matchId: z.string().uuid() }).parse(req.params)
+  const input = matchStatsSaveSchema.parse(req.body)
+  const tenantId = req.user!.role === 'SUPER_ADMIN' ? null : req.user!.tenant_id
+  if (req.user!.role !== 'SUPER_ADMIN' && !tenantId) return res.status(400).json({ error: 'Usuario sem tenant.' })
+  if (!canAccessModule(req.user!, 'results')) return res.status(403).json({ error: 'Voce nao tem permissao para salvar a sumula.' })
+
+  let matchQuery = adminSupabase.from('matches').select('id, tenant_id').eq('id', matchId)
+  if (tenantId) matchQuery = matchQuery.eq('tenant_id', tenantId)
+  const { data: match, error: matchError } = await matchQuery.maybeSingle()
+  if (matchError) return res.status(500).json({ error: matchError.message })
+  if (!match) return res.status(404).json({ error: 'Evento nao encontrado.' })
+
+  const playerIds = [...new Set(input.rows.map((row) => row.playerId))]
+  const { data: players, error: playersError } = await adminSupabase
+    .from('players')
+    .select('id')
+    .eq('tenant_id', match.tenant_id)
+    .in('id', playerIds)
+  if (playersError) return res.status(500).json({ error: playersError.message })
+  if ((players ?? []).length !== playerIds.length) return res.status(400).json({ error: 'A sumula contem participante invalido para esta empresa.' })
+
+  const statPayload = input.rows.map((row) => ({
+    tenant_id: match.tenant_id,
+    match_id: matchId,
+    player_id: row.playerId,
+    goals: row.goals,
+    assists: row.assists,
+    present: row.present,
+    wins: row.wins,
+    draws: row.draws,
+    losses: row.losses,
+  }))
+  const { error: statsError } = await adminSupabase.from('match_player_stats').upsert(statPayload, { onConflict: 'match_id,player_id' })
+  if (statsError) return res.status(500).json({ error: statsError.message })
+
+  if (input.match) {
+    const { error: updateError } = await adminSupabase.from('matches').update(input.match).eq('id', matchId).eq('tenant_id', match.tenant_id)
+    if (updateError) return res.status(500).json({ error: updateError.message })
+  }
+
+  return res.json({ saved: input.rows.length, status: input.match?.status ?? null })
 })
 
 app.put('/api/matches/:matchId/attendance/:playerId', requireAuth, async (req, res) => {

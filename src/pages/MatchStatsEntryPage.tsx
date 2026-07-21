@@ -14,11 +14,13 @@ import {
   getMatchPlayerStats,
   getMatches,
   getPickups,
+  saveMatchPlayerStat,
   savePostMatchStats,
   shareMatchWithConfiguredGroup,
   upsertAttendance,
 } from '../lib/data'
 import { displayPosition } from '../lib/positions'
+import { clearMatchStatsDraft, readMatchStatsDrafts, writeMatchStatsDraft } from '../lib/match-stats-draft'
 import { usePrimaryStatLabel } from '../lib/stats-labels'
 import type { Attendance, Match, MatchGameResult, MatchTeamResult } from '../lib/types'
 import { compareTextPtBr, getErrorMessage } from '../lib/utils'
@@ -33,6 +35,7 @@ export function MatchStatsEntryPage() {
   const matchStats = useQuery({ queryKey: ['match-player-stats', matchId], queryFn: () => getMatchPlayerStats(matchId), enabled: Boolean(matchId) })
   const latestTeamDraw = useQuery({ queryKey: ['latest-team-draw', matchId], queryFn: () => getLatestTeamDraw(matchId), enabled: Boolean(matchId) })
   const [saving, setSaving] = useState(false)
+  const [savingProgress, setSavingProgress] = useState(false)
   const [savingPartialId, setSavingPartialId] = useState('')
   const [feedback, setFeedback] = useState('')
   const [toast, setToast] = useState('')
@@ -51,6 +54,7 @@ export function MatchStatsEntryPage() {
     return []
   }, [selectedMatch, drawTeams])
   const gameResults = gameDraft?.matchId === matchId ? gameDraft.results : initialGameResults
+  const localDrafts = readMatchStatsDrafts(matchId)
   const rows = useMemo(
     () => (attendance.data ?? [])
       .filter((row) => ['CONFIRMADO', 'COMPARECEU', 'FALTOU'].includes(row.status) && row.player)
@@ -76,7 +80,7 @@ export function MatchStatsEntryPage() {
 
   function buildRowFromForm(item: Attendance, override: Partial<{ present: boolean; goals: number; assists: number }> = {}) {
     const form = formRef.current
-    return {
+    const row = {
       playerId: item.player_id,
       present: override.present ?? form?.querySelector<HTMLInputElement>(`[name="present-${item.player_id}"]`)?.checked ?? item.status !== 'FALTOU',
       goals: override.goals ?? Number(form?.querySelector<HTMLInputElement>(`[name="goals-${item.player_id}"]`)?.value || 0),
@@ -85,6 +89,8 @@ export function MatchStatsEntryPage() {
       draws: 0,
       losses: 0,
     }
+    writeMatchStatsDraft(matchId, row)
+    return row
   }
 
   function buildTeamResults(): MatchTeamResult[] {
@@ -145,28 +151,14 @@ export function MatchStatsEntryPage() {
     setSavingPartialId(item.player_id)
     setFeedback('')
     try {
+      await saveMatchPlayerStat(selectedMatch.id, {
+        ...row,
+        wins: saved?.wins ?? 0,
+        draws: saved?.draws ?? 0,
+        losses: saved?.losses ?? 0,
+      })
       await upsertAttendance(selectedMatch.id, row.playerId, row.present ? 'COMPARECEU' : 'FALTOU')
-      await savePostMatchStats(
-        selectedMatch.id,
-        {
-          team_a_score: selectedMatch.team_a_score,
-          team_b_score: selectedMatch.team_b_score,
-          team_results: selectedMatch.team_results ?? latestTeamDraw.data?.payload?.teams?.map((team) => ({
-            id: team.id,
-            name: team.name,
-            score: 0,
-            playerIds: team.players.map((player) => player.id),
-          })) ?? [],
-          game_results: selectedMatch.game_results ?? [],
-          status: selectedMatch.status,
-        },
-        [{
-          ...row,
-          wins: saved?.wins ?? 0,
-          draws: saved?.draws ?? 0,
-          losses: saved?.losses ?? 0,
-        }],
-      )
+      clearMatchStatsDraft(selectedMatch.id, row.playerId)
       await Promise.all([attendance.refetch(), matchStats.refetch()])
       await queryClient.invalidateQueries({ queryKey: ['completed-match-sheets'] })
       notify('Atualizado com sucesso.')
@@ -174,6 +166,58 @@ export function MatchStatsEntryPage() {
       setFeedback(getErrorMessage(error, 'Nao foi possivel atualizar este participante.'))
     } finally {
       setSavingPartialId('')
+    }
+  }
+
+  async function saveProgress() {
+    if (!selectedMatch || !formRef.current || !canLaunchStats) return
+    const form = new FormData(formRef.current)
+    const statRows = applyGameResultsToRows(rows.map((item) => ({
+      playerId: item.player_id,
+      present: form.get(`present-${item.player_id}`) === 'on',
+      goals: Number(form.get(`goals-${item.player_id}`) || 0),
+      assists: Number(form.get(`assists-${item.player_id}`) || 0),
+      wins: 0,
+      draws: 0,
+      losses: 0,
+    })))
+
+    statRows.forEach((row) => writeMatchStatsDraft(selectedMatch.id, row))
+    setSavingProgress(true)
+    setFeedback('')
+    try {
+      await savePostMatchStats(
+        selectedMatch.id,
+        {
+          team_a_score: selectedMatch.team_a_score,
+          team_b_score: selectedMatch.team_b_score,
+          team_results: buildTeamResults(),
+          game_results: gameResults,
+          status: selectedMatch.status,
+        },
+        statRows,
+      )
+
+      let attendanceWarning = ''
+      try {
+        await Promise.all(statRows.map((row) => upsertAttendance(selectedMatch.id, row.playerId, row.present ? 'COMPARECEU' : 'FALTOU')))
+      } catch (error) {
+        attendanceWarning = ` Os numeros foram gravados, mas a presenca nao sincronizou: ${getErrorMessage(error, 'tente novamente.')}`
+      }
+
+      clearMatchStatsDraft(selectedMatch.id)
+      await Promise.all([
+        attendance.refetch(),
+        matchStats.refetch(),
+        matches.refetch(),
+        queryClient.invalidateQueries({ queryKey: ['completed-match-sheets'] }),
+      ])
+      setFeedback(`Progresso salvo sem encerrar o evento.${attendanceWarning}`)
+      notify('Progresso salvo com sucesso.')
+    } catch (error) {
+      setFeedback(`${getErrorMessage(error, 'Nao foi possivel sincronizar agora.')} O rascunho continua salvo neste aparelho.`)
+    } finally {
+      setSavingProgress(false)
     }
   }
 
@@ -210,7 +254,7 @@ export function MatchStatsEntryPage() {
     setSaving(true)
     setFeedback('')
     try {
-      await Promise.all(statRows.map((row) => upsertAttendance(selectedMatch.id, row.playerId, row.present ? 'COMPARECEU' : 'FALTOU')))
+      statRows.forEach((row) => writeMatchStatsDraft(selectedMatch.id, row))
       await savePostMatchStats(
         selectedMatch.id,
         {
@@ -222,6 +266,14 @@ export function MatchStatsEntryPage() {
         },
         statRows,
       )
+
+      let attendanceNotice = ''
+      try {
+        await Promise.all(statRows.map((row) => upsertAttendance(selectedMatch.id, row.playerId, row.present ? 'COMPARECEU' : 'FALTOU')))
+      } catch (error) {
+        attendanceNotice = ` A estatistica foi preservada, mas a presenca nao sincronizou: ${getErrorMessage(error, 'tente novamente pela Agenda.')}`
+      }
+      clearMatchStatsDraft(selectedMatch.id)
 
       let groupNotice = ''
       try {
@@ -266,7 +318,7 @@ export function MatchStatsEntryPage() {
         matchStats.refetch(),
         queryClient.invalidateQueries({ queryKey: ['completed-match-sheets'] }),
       ])
-      setFeedback(`${nextMatch ? 'Estatisticas salvas e proximo evento agendado.' : 'Estatisticas salvas com sucesso.'}${groupNotice}`)
+      setFeedback(`${nextMatch ? 'Estatisticas salvas e proximo evento agendado.' : 'Estatisticas salvas com sucesso.'}${attendanceNotice}${groupNotice}`)
       if (nextMatch) navigate(`/lancamento/${nextMatch.id}`)
     } catch (error) {
       setFeedback(getErrorMessage(error, 'Nao foi possivel salvar as estatisticas.'))
@@ -347,7 +399,7 @@ export function MatchStatsEntryPage() {
           </p>
         )}
 
-        <form ref={formRef} key={`${matchId}-${matchStats.dataUpdatedAt}`} className="mt-4 grid gap-4" onSubmit={submit}>
+        <form ref={formRef} key={matchId} className="mt-4 grid gap-4" onSubmit={submit}>
           {drawTeams.length > 0 && (
             <div className="rounded-xl border border-green-200 bg-green-50/70 p-3 dark:border-green-900/50 dark:bg-green-950/20 sm:p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -416,6 +468,7 @@ export function MatchStatsEntryPage() {
           <div className="grid gap-3">
             {rows.map((item) => {
               const saved = statsByPlayerId.get(item.player_id)
+              const draft = localDrafts[item.player_id]
               return (
                 <div key={item.id} className="grid min-w-0 gap-3 rounded-xl border border-border bg-white/80 p-3 shadow-sm dark:bg-slate-950/40 sm:p-4">
                   <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_160px] sm:items-center">
@@ -427,7 +480,7 @@ export function MatchStatsEntryPage() {
                       <input
                         name={`present-${item.player_id}`}
                         type="checkbox"
-                        defaultChecked={saved?.present ?? item.status !== 'FALTOU'}
+                        defaultChecked={draft?.present ?? saved?.present ?? item.status !== 'FALTOU'}
                         disabled={!canLaunchStats || savingPartialId === item.player_id}
                         className="size-5 accent-green-700"
                         onChange={(event) => savePartialRow(item, { present: event.currentTarget.checked })}
@@ -436,8 +489,8 @@ export function MatchStatsEntryPage() {
                     </label>
                   </div>
                   <div className="grid min-w-0 grid-cols-2 gap-2 sm:gap-3">
-                    <NumberStepper name={`goals-${item.player_id}`} label={primaryStatLabels.plural} defaultValue={saved?.goals ?? 0} disabled={!canLaunchStats || savingPartialId === item.player_id} onValueChange={(value) => savePartialRow(item, { goals: value })} />
-                    <NumberStepper name={`assists-${item.player_id}`} label="Assistencias" defaultValue={saved?.assists ?? 0} disabled={!canLaunchStats || savingPartialId === item.player_id} onValueChange={(value) => savePartialRow(item, { assists: value })} />
+                    <NumberStepper name={`goals-${item.player_id}`} label={primaryStatLabels.plural} defaultValue={draft?.goals ?? saved?.goals ?? 0} disabled={!canLaunchStats || savingPartialId === item.player_id} onValueChange={(value) => savePartialRow(item, { goals: value })} />
+                    <NumberStepper name={`assists-${item.player_id}`} label="Assistencias" defaultValue={draft?.assists ?? saved?.assists ?? 0} disabled={!canLaunchStats || savingPartialId === item.player_id} onValueChange={(value) => savePartialRow(item, { assists: value })} />
                   </div>
                 </div>
               )
@@ -448,10 +501,16 @@ export function MatchStatsEntryPage() {
               </div>
             )}
           </div>
-          <Button className="min-h-12 w-full" disabled={saving || !rows.length || !canLaunchStats}>
-            {saving ? <LoaderCircle className="animate-spin" size={16} /> : <Save size={16} />}
-            {saving ? 'Finalizando...' : 'Finalizar evento e calcular estatisticas'}
-          </Button>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <Button type="button" variant="secondary" className="min-h-12 w-full" onClick={saveProgress} disabled={saving || savingProgress || !rows.length || !canLaunchStats}>
+              {savingProgress ? <LoaderCircle className="animate-spin" size={16} /> : <Save size={16} />}
+              {savingProgress ? 'Salvando...' : 'Salvar progresso'}
+            </Button>
+            <Button type="submit" className="min-h-12 w-full" disabled={saving || savingProgress || !rows.length || !canLaunchStats}>
+              {saving ? <LoaderCircle className="animate-spin" size={16} /> : <CheckCircle2 size={16} />}
+              {saving ? 'Finalizando...' : 'Finalizar evento e calcular estatisticas'}
+            </Button>
+          </div>
         </form>
       </Card>
       {toast && (
